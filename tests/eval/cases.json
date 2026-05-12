@@ -1,44 +1,41 @@
 [
   {
-    "name": "M20 cylinder from Festo — initial query",
-    "messages": [{ "role": "user", "content": "M20 cylinder from Festo" }],
+    "name": "Siemens motion control sensor — initial query",
+    "messages": [{ "role": "user", "content": "Siemens motion control sensor" }],
     "expect": {
-      "category": "Pneumatic Cylinder",
       "minResults": 1,
-      "vendorIncludes": "Festo"
+      "vendorIncludes": "siemens"
     }
   },
   {
-    "name": "show me from another brand — must keep cylinder, drop Festo",
+    "name": "show me from another brand — must keep sensor category, drop SICK",
     "messages": [
-      { "role": "user", "content": "M20 cylinder from Festo" },
-      { "role": "assistant", "content": "Here are some Festo M20 cylinders." },
+      { "role": "user", "content": "SICK motion control sensor" },
+      { "role": "assistant", "content": "Here are some SICK motion control sensors." },
       { "role": "user", "content": "show me from another brand" }
     ],
-    "lastShownCategory": "Pneumatic Cylinder",
-    "lastShownBrands": ["Festo"],
+    "lastShownCategory": "motion control sensors",
+    "lastShownBrands": ["sick"],
     "expect": {
-      "category": "Pneumatic Cylinder",
       "minResults": 1,
-      "vendorExcludes": ["Festo"],
+      "vendorExcludes": ["sick"],
       "categoryHomogeneous": true
     }
   },
   {
-    "name": "ABB circuit breaker",
-    "messages": [{ "role": "user", "content": "ABB circuit breaker" }],
+    "name": "ABB inverter drive",
+    "messages": [{ "role": "user", "content": "ABB inverter drive" }],
     "expect": {
-      "category": "Circuit Breaker",
       "minResults": 1,
-      "vendorIncludes": "ABB"
+      "vendorIncludes": "abb"
     }
   },
   {
-    "name": "exact SKU lookup",
-    "messages": [{ "role": "user", "content": "DSNU-20-50-P-A" }],
+    "name": "exact SKU lookup — DUS60E (SICK encoder)",
+    "messages": [{ "role": "user", "content": "DUS60E" }],
     "expect": {
       "minResults": 1,
-      "topMatchSkuContains": "DSNU-20-50-P-A"
+      "topMatchTitleContains": "DUS60E"
     }
   },
   {

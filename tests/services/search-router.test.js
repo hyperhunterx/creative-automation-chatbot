@@ -28,37 +28,37 @@ describe('smartSearch (v6 orchestrator)', () => {
 
   it('runs the full pipeline and returns top-N reranked candidates', async () => {
     mods.qu.extractIntent.mockResolvedValue({
-      category: 'Pneumatic Cylinder',
+      category: 'pneumatic cylinders',
       brand_include: [],
-      brand_exclude: ['Festo'],
+      brand_exclude: ['festo'],
       specs: {},
       free_text: 'M20 cylinder',
     });
     mods.em.embedOne.mockResolvedValue(new Array(1024).fill(0.01));
     mods.re.hybridSearch.mockResolvedValue([
-      { id: '1', title: 'SMC', vendor: 'SMC' },
-      { id: '2', title: 'Norgren', vendor: 'Norgren' },
+      { id: '1', title: 'SMC', vendor: 'SMC', vendorNormalized: 'smc' },
+      { id: '2', title: 'Norgren', vendor: 'Norgren', vendorNormalized: 'norgren' },
     ]);
     mods.rk.rerank.mockResolvedValue([
-      { id: '2', title: 'Norgren', vendor: 'Norgren', rerank_score: 0.9 },
-      { id: '1', title: 'SMC', vendor: 'SMC', rerank_score: 0.8 },
+      { id: '2', title: 'Norgren', vendor: 'Norgren', vendorNormalized: 'norgren', rerank_score: 0.9 },
+      { id: '1', title: 'SMC', vendor: 'SMC', vendorNormalized: 'smc', rerank_score: 0.8 },
     ]);
 
     const { smartSearch } = await import('../../app/services/search-router.server.js?case=1');
     const out = await smartSearch({
       messages: [{ role: 'user', content: 'M20 cylinder from another brand' }],
-      lastShownCategory: 'Pneumatic Cylinder',
-      lastShownBrands: ['Festo'],
+      lastShownCategory: 'pneumatic cylinders',
+      lastShownBrands: ['festo'],
     });
 
     expect(out.products.map(p => p.id)).toEqual(['2', '1']);
-    expect(out.intent.brand_exclude).toEqual(['Festo']);
+    expect(out.intent.brand_exclude).toEqual(['festo']);
     expect(out.searchType).toBe('hybrid');
   });
 
   it('returns empty result with intent when retrieval is empty', async () => {
     mods.qu.extractIntent.mockResolvedValue({
-      category: 'Nonexistent',
+      category: 'nonexistent',
       brand_include: [],
       brand_exclude: [],
       specs: {},

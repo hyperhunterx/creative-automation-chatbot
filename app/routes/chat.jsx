@@ -377,9 +377,15 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
 
         // Persist what we just showed so the NEXT turn's query understanding
         // can carry the category context (e.g. "another brand" after cylinders).
+        // Values stored are normalized (lowercase) so they line up with the
+        // retrieval filter on the next turn.
         try {
           const dbMod = await import("../db.server");
-          const shownBrands = [...new Set(smart.products.map(p => p.vendor).filter(Boolean))];
+          const shownBrands = [...new Set(
+            smart.products
+              .map(p => p.vendorNormalized || (p.vendor ? String(p.vendor).trim().toLowerCase() : null))
+              .filter(Boolean)
+          )];
           const nextCategory = smart.intent?.category || lastShownCategory;
           await dbMod.default.conversation.upsert({
             where: { id: conversationId },

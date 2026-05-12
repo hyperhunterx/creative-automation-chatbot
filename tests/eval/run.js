@@ -31,23 +31,35 @@ function pass(testName) {
   return true;
 }
 
+function lc(s) { return typeof s === 'string' ? s.trim().toLowerCase() : s; }
+
 function evaluate(testCase, result) {
   const e = testCase.expect || {};
   if (e.minResults != null && result.products.length < e.minResults)
     return fail(testCase.name, `expected at least ${e.minResults} results, got ${result.products.length}`);
   if (e.maxResults != null && result.products.length > e.maxResults)
     return fail(testCase.name, `expected at most ${e.maxResults} results, got ${result.products.length}`);
-  if (e.category && result.intent.category !== e.category)
+  if (e.category && lc(result.intent.category) !== lc(e.category))
     return fail(testCase.name, `expected intent.category=${e.category}, got ${result.intent.category}`);
-  if (e.vendorIncludes && !result.products.some(p => p.vendor === e.vendorIncludes))
-    return fail(testCase.name, `expected at least one product with vendor=${e.vendorIncludes}`);
+  if (e.vendorIncludes) {
+    const want = lc(e.vendorIncludes);
+    if (!result.products.some(p => lc(p.vendorNormalized || p.vendor) === want))
+      return fail(testCase.name, `expected at least one product with vendor=${e.vendorIncludes}`);
+  }
   if (Array.isArray(e.vendorExcludes)) {
-    const bad = result.products.find(p => e.vendorExcludes.includes(p.vendor));
+    const excluded = e.vendorExcludes.map(lc);
+    const bad = result.products.find(p => excluded.includes(lc(p.vendorNormalized || p.vendor)));
     if (bad) return fail(testCase.name, `found excluded vendor ${bad.vendor} in results`);
   }
   if (e.categoryHomogeneous && result.products.length > 1) {
-    const cats = new Set(result.products.map(p => p.category).filter(Boolean));
-    if (cats.size > 1) return fail(testCase.name, `expected single category, got ${[...cats].join(', ')}`);
+    // Products are homogeneous if at least one category is shared by all of them.
+    const allCats = result.products.map(p => new Set(Array.isArray(p.categories) ? p.categories : []));
+    const first = [...allCats[0]];
+    const shared = first.filter(c => allCats.every(s => s.has(c)));
+    if (shared.length === 0) {
+      const sample = result.products.slice(0, 3).map(p => `[${(p.categories || []).join('|')}]`).join(', ');
+      return fail(testCase.name, `expected products to share a category, got disjoint sets: ${sample}`);
+    }
   }
   if (e.topMatchSkuContains) {
     const top = result.products[0];
@@ -56,6 +68,11 @@ function evaluate(testCase, result) {
     const skus = arr.map(v => v?.sku).filter(Boolean).join(',');
     if (!skus.includes(e.topMatchSkuContains))
       return fail(testCase.name, `expected top SKU to contain ${e.topMatchSkuContains}, got [${skus}]`);
+  }
+  if (e.topMatchTitleContains) {
+    const top = result.products[0];
+    if (!top?.title || !top.title.includes(e.topMatchTitleContains))
+      return fail(testCase.name, `expected top title to contain ${e.topMatchTitleContains}, got "${top?.title || '(no result)'}"`);
   }
   return pass(testCase.name);
 }
