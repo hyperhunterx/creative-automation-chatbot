@@ -1,5 +1,21 @@
 /**
- * Tool Service — v5.0 (NO GATES)
+ * Tool Service — v5.0 (NO GATES); STATUS UPDATED FOR v6
+ *
+ * As of v6 (hybrid retrieval rewrite), `processProductSearchResult` is
+ * effectively a FALLBACK path. In normal operation:
+ *   1. smartSearch in app/services/search-router.server.js runs first
+ *   2. If it returns products, the catalog-search MCP tools are STRIPPED
+ *      from the Claude client (see chat.jsx) before Claude is invoked
+ *   3. Claude therefore never calls search_catalog, and this code never runs
+ *
+ * The path here only fires if:
+ *   - smartSearch throws (e.g. Postgres outage)
+ *   - AND Claude has retained catalog tools
+ *   - AND Claude decides to call one of them
+ *
+ * Kept as-is so the chatbot has a working last-resort path even during a
+ * Postgres outage. A future cleanup task (v1.1+) can delete this code once
+ * we trust the hybrid pipeline as the sole source of products.
  *
  * Processes MCP tool responses (product search, cart updates).
  *
