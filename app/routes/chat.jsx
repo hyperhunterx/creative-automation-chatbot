@@ -314,7 +314,38 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
     // ───────────────────────────────────────────────────────────────────
     try {
       const { smartSearch } = await import("../services/search-router.server.js");
-      const smart = await smartSearch(userMessage, shopDomain);
+
+      // Load lastShown context from the conversation row so query-understanding
+      // can carry "we were just looking at cylinders" across turns. Safe-default
+      // to null/[] if the row doesn't exist yet (first turn).
+      let lastShownCategory = null;
+      let lastShownBrands = [];
+      try {
+        const dbMod = await import("../db.server");
+        const conv = await dbMod.default.conversation.findUnique({
+          where: { id: conversationId },
+          select: { lastShownCategory: true, lastShownBrands: true },
+        });
+        if (conv) {
+          lastShownCategory = conv.lastShownCategory ?? null;
+          lastShownBrands = conv.lastShownBrands ?? [];
+        }
+      } catch (loadErr) {
+        // Conversation may not exist yet on the first turn; treat as no hint.
+        console.warn(`[Chat] Could not load conversation lastShown state: ${loadErr.message}`);
+      }
+
+      const messagesForSearch = conversationHistory.map(m => ({
+        role: m.role,
+        content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+      }));
+
+      const smart = await smartSearch({
+        messages: messagesForSearch,
+        lastShownCategory,
+        lastShownBrands,
+      });
+
       if (smart && Array.isArray(smart.products) && smart.products.length > 0) {
         console.log(`[Chat] SmartSearch pre-found ${smart.products.length} products (${smart.searchType})`);
         stream.sendMessage({ type: "product_results", products: smart.products });
@@ -342,6 +373,29 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
             role: "user",
             content: `${systemNote}\n\nUser message: ${conversationHistory[lastIdx].content}`,
           };
+        }
+
+        // Persist what we just showed so the NEXT turn's query understanding
+        // can carry the category context (e.g. "another brand" after cylinders).
+        try {
+          const dbMod = await import("../db.server");
+          const shownBrands = [...new Set(smart.products.map(p => p.vendor).filter(Boolean))];
+          const nextCategory = smart.intent?.category || lastShownCategory;
+          await dbMod.default.conversation.upsert({
+            where: { id: conversationId },
+            create: {
+              id: conversationId,
+              shopDomain,
+              lastShownCategory: nextCategory,
+              lastShownBrands: shownBrands,
+            },
+            update: {
+              lastShownCategory: nextCategory,
+              lastShownBrands: shownBrands.length ? shownBrands : (lastShownBrands ?? []),
+            },
+          });
+        } catch (persistErr) {
+          console.warn(`[Chat] Failed to persist lastShown: ${persistErr.message}`);
         }
       }
     } catch (smartErr) {
