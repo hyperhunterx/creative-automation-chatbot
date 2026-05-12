@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../app/services/storefront-paginate.server.js', () => ({
-  makeStorefrontClient: vi.fn(),
+vi.mock('../../app/services/admin-shopify.server.js', () => ({
+  makeAdminClient: vi.fn(),
 }));
 vi.mock('../../app/services/product-index.server.js', () => ({
   upsertProductFromShopify: vi.fn(),
