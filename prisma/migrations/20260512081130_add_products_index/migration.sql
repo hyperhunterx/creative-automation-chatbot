@@ -25,6 +25,8 @@ CREATE TABLE "products" (
   "deletedAt"         TIMESTAMPTZ,
   "indexedAt"         TIMESTAMPTZ NOT NULL DEFAULT now(),
   "updatedAt"         TIMESTAMPTZ NOT NULL DEFAULT now()
+  -- NOTE: updatedAt is managed by Prisma client (@updatedAt). Direct SQL
+  -- inserts/updates must set it explicitly — there is no DB-level ON UPDATE.
 );
 -- NOTE: embedding column is vector(1024) — matches Voyage voyage-3-lite output
 
@@ -45,7 +47,9 @@ CREATE INDEX "products_embedding_idx"  ON "products"
   USING hnsw ("embedding" vector_cosine_ops)
   WITH (m = 16, ef_construction = 64);
 
--- Auto-update searchTsv from title + vendor + tags + description + variant SKUs
+-- Auto-update searchTsv from title + vendor + tags + description + variant SKUs.
+-- If a future column is added to the searchable text set, extend BOTH this
+-- function body AND the trigger's `OF` clause below.
 CREATE OR REPLACE FUNCTION products_search_tsv_update() RETURNS trigger AS $$
 BEGIN
   NEW."searchTsv" :=
@@ -56,7 +60,13 @@ BEGIN
     || setweight(to_tsvector('simple',
          coalesce(
            (SELECT string_agg(v->>'sku', ' ')
-              FROM jsonb_array_elements(NEW.variants) v
+              -- Guard against non-array variants payloads (e.g. webhook sends {})
+              FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(NEW.variants) = 'array'
+                     THEN NEW.variants
+                     ELSE '[]'::jsonb
+                END
+              ) v
               WHERE v ? 'sku'),
            ''
          )), 'A');
