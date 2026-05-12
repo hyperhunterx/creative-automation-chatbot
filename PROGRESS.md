@@ -116,7 +116,10 @@ Phase 9  Ship to production                   [░░░░░░░░░░]  
 |---|---|---|
 | 2026-05-12 | Reuse the codebase, replace retrieval layer only | Bug is localized to retrieval; rewriting auth/cart/widget wastes 2-4 weeks |
 | 2026-05-12 | Postgres + pgvector on existing Railway instance | 200k products is trivial for one Postgres; zero new infra |
-| 2026-05-12 | OpenAI 3-small + Cohere Rerank instead of local BGE | Hobby plan RAM/CPU pressure makes local models impractical; API cost is $5/mo |
+| 2026-05-12 | ~~OpenAI 3-small embed~~ → Voyage AI `voyage-3-lite` (1024 dims) | Voyage 200M-token free trial covers bootstrap; voyage-3-lite slightly beats OpenAI 3-small on retrieval benchmarks; smaller vectors (1024 vs 1536) = smaller index. Embedding dimension column changed from `vector(1536)` to `vector(1024)` |
+| 2026-05-12 | Route Haiku (query understanding) through OpenRouter | Rohit has $20 OpenRouter credit; use it instead of letting it sit idle. New `app/services/llm.server.js` gateway uses OpenAI SDK pointed at `https://openrouter.ai/api/v1` (Anthropic SDK doesn't support custom base URLs) |
+| 2026-05-12 | Keep Sonnet (final reply) on direct Anthropic SDK | Streaming + tool-use path is delicate; lower risk to leave `claude.server.js` untouched at the SDK layer in v1. Can flip to OpenRouter later if desired |
+| 2026-05-12 | Cohere Rerank kept | Free tier covers all of QA; small per-call cost in production |
 | 2026-05-12 | Defer spec-based filtering to v1.1 | Spec extraction quality unknown; ship category + brand filters first |
 | 2026-05-12 | Defer category normalization to v1.1 | Use raw Shopify productType in v1; add canonical mapping only if QA shows misses |
 | 2026-05-12 | v1 scope = search only (no Q&A, no cart polish) | Lowest-risk, addresses the reported failure mode directly |

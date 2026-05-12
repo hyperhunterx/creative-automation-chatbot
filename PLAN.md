@@ -202,7 +202,7 @@ CREATE TABLE products (
   specs           jsonb DEFAULT '{}'::jsonb,     -- extracted key/value
   variants        jsonb DEFAULT '[]'::jsonb,     -- [{id, sku, price, available}]
   search_tsv      tsvector,                      -- title + vendor + tags + desc
-  embedding       vector(1536),                  -- OpenAI text-embedding-3-small
+  embedding       vector(1024),                  -- Voyage AI voyage-3-lite
   updated_at      timestamptz DEFAULT now(),
   indexed_at      timestamptz DEFAULT now()
 );
@@ -231,7 +231,7 @@ Subscribe via the existing webhook infrastructure (`app/routes/api.webhooks.jsx`
 - `products/delete`
 - `inventory_levels/update`
 
-Handler pipeline: extract structured fields → embed via OpenAI → upsert into `products` table.
+Handler pipeline: extract structured fields → embed via Voyage AI → upsert into `products` table.
 
 **Idempotency requirement:** Shopify retries aggressively. Every handler must be safe to call multiple times with the same payload. Use `INSERT ... ON CONFLICT (id) DO UPDATE`. Track the latest webhook `updated_at` per product; skip out-of-order older events.
 
@@ -255,7 +255,7 @@ Script `scripts/bootstrap-index.js`:
 - Connects to Railway Postgres via `DATABASE_PUBLIC_URL` env var
 - Same logic as full sync but against an empty table
 - Estimated runtime: ~30 minutes
-- Estimated cost: ~$0.80 in OpenAI embeddings
+- Estimated cost: $0 (covered by Voyage AI 200M-token free trial)
 
 ### Category normalization
 
@@ -269,19 +269,25 @@ Best-effort regex pass for common attributes (`bore_mm`, `voltage_v`, `current_a
 
 | Component | Provider | Model | Cost |
 |---|---|---|---|
-| Embeddings (bootstrap) | OpenAI | text-embedding-3-small | ~$0.80 one-time |
-| Embeddings (ongoing) | OpenAI | text-embedding-3-small | < $2/month |
+| Embeddings (bootstrap) | Voyage AI | voyage-3-lite (1024 dims) | **Free** (covered by 200M trial-token allowance) |
+| Embeddings (ongoing) | Voyage AI | voyage-3-lite | **Free** until trial exhausted; then ~$2/M tokens |
 | Rerank | Cohere | rerank-v3.5 | first 1000/mo free; ~$1 per 1000 turns after |
-| Query understanding | Anthropic | Haiku 4.5 | ~$0.50 per 1000 turns |
-| Final reply | Anthropic | Sonnet 4.6 (with prompt caching) | ~$3-5 per 1000 turns |
+| Query understanding | OpenRouter → Anthropic | Haiku 4.5 (`anthropic/claude-haiku-4-5`) | covered by $20 OpenRouter credit, then ~$0.50 per 1000 turns |
+| Final reply | OpenRouter → Anthropic | Sonnet 4.6 (`anthropic/claude-sonnet-4-6`) | covered by $20 OpenRouter credit, then ~$3-5 per 1000 turns |
 
-**Total retrieval-infra addition:** roughly $5/month at low volume, plus the existing Anthropic spend on Sonnet replies.
+**Total retrieval-infra addition: $0 during bootstrap.** Voyage AI trial covers all embeddings, OpenRouter credit covers LLM calls, Cohere free tier covers QA reranks. Production costs start when those credits are exhausted.
+
+**Why this combo:**
+- Voyage `voyage-3-lite` slightly outperforms OpenAI `text-embedding-3-small` on retrieval benchmarks and uses smaller 1024-dim vectors (smaller index footprint).
+- OpenRouter exposes Anthropic models via an OpenAI-compatible chat-completions endpoint, so we use the OpenAI SDK with `baseURL` pointed at OpenRouter. (Anthropic SDK does not support custom base URLs cleanly.)
+- The `ANTHROPIC_API_KEY` env var stays in place as a fallback; the LLM service module reads `OPENROUTER_API_KEY` first and falls back to direct Anthropic if absent.
 
 **New keys to add to Railway environment variables:**
-- `OPENAI_API_KEY`
-- `COHERE_API_KEY`
+- `VOYAGE_API_KEY` — get one at https://dashboard.voyageai.com/api-keys
+- `OPENROUTER_API_KEY` — already present in Railway (`OPENROUTER_API_KEY` or similar — check existing vars)
+- `COHERE_API_KEY` — get one at https://dashboard.cohere.com/api-keys
 
-(`ANTHROPIC_API_KEY` is already present.)
+(`ANTHROPIC_API_KEY` is already present and stays as the fallback.)
 
 ## 10. Error handling and fallbacks
 

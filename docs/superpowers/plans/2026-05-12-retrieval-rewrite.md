@@ -4,9 +4,11 @@
 
 **Goal:** Replace the current Shopify-Storefront-based search with a hybrid retrieval pipeline (Postgres + pgvector + LLM query understanding + Cohere rerank) so that conversational follow-ups like "show me from another brand" return correctly filtered products.
 
-**Architecture:** Build a local product index in the existing Railway Postgres with structured columns, a `tsvector` for keyword matching, and a 1536-dim `vector` for semantic similarity. Keep the index synchronized with Shopify via webhooks + nightly cron + a one-time bootstrap. On each chat turn, run a four-step pipeline — query understanding (Haiku) → hybrid SQL retrieval → Cohere rerank → Claude Sonnet reply — that the user already sees today, just with much better candidates.
+**Architecture:** Build a local product index in the existing Railway Postgres with structured columns, a `tsvector` for keyword matching, and a 1024-dim `vector` for semantic similarity (Voyage AI `voyage-3-lite` output). Keep the index synchronized with Shopify via webhooks + nightly cron + a one-time bootstrap. On each chat turn, run a four-step pipeline — query understanding (Haiku) → hybrid SQL retrieval → Cohere rerank → Claude Sonnet reply — that the user already sees today, just with much better candidates.
 
-**Tech Stack:** Node 20 + React Router 7 + Prisma 6 + PostgreSQL 16 with `pgvector` + `pg_trgm` extensions + Anthropic SDK (`@anthropic-ai/sdk` ≥ 0.40) for Haiku 4.5 and Sonnet 4.6 + OpenAI SDK (`openai` ≥ 4) for `text-embedding-3-small` + Cohere SDK (`cohere-ai` ≥ 7) for `rerank-v3.5` + Vitest for tests.
+**Tech Stack:** Node 20 + React Router 7 + Prisma 6 + PostgreSQL 16 with `pgvector` + `pg_trgm` extensions + Voyage AI client (`voyageai`) for `voyage-3-lite` embeddings (1024 dims) + OpenAI SDK (`openai` ≥ 4) pointed at OpenRouter for Haiku 4.5 and Sonnet 4.6 (`anthropic/claude-haiku-4-5`, `anthropic/claude-sonnet-4-6`) + Cohere SDK (`cohere-ai` ≥ 7) for `rerank-v3.5` + Vitest for tests.
+
+**Provider note (updated 2026-05-12):** Earlier draft used OpenAI for embeddings and Anthropic SDK directly. Switched to Voyage AI (free 200M-token trial covers bootstrap + months of operation) and OpenRouter (user has $20 credit on existing key). `ANTHROPIC_API_KEY` stays in Railway as a fallback — the LLM service prefers OpenRouter when both are present.
 
 ---
 
@@ -15,7 +17,7 @@
 ### New files
 | Path | Responsibility |
 |---|---|
-| `app/services/embeddings.server.js` | OpenAI client wrapper; `embedOne(text)` and `embedMany(texts[])` with retry |
+| `app/services/embeddings.server.js` | Voyage AI client wrapper; `embedOne(text)` and `embedMany(texts[])` with retry |
 | `app/services/product-index.server.js` | `extractProductRow(shopifyProduct)`, `upsertProduct(row)`, `softDeleteProduct(id)` — idempotent |
 | `app/services/retrieval.server.js` | `hybridSearch(intent)` — runs the parameterised SQL |
 | `app/services/query-understanding.server.js` | `extractIntent(messages, lastShownCategory, lastShownBrands)` — calls Haiku, parses strict JSON |
@@ -37,15 +39,15 @@
 ### Modified files
 | Path | Change |
 |---|---|
-| `package.json` | Add deps: `openai`, `cohere-ai`, `vitest`; add scripts `test`, `test:integration`, `eval` |
-| `prisma/schema.prisma` | Add `Product` model + relations + `Unsupported("tsvector")` and `Unsupported("vector(1536)")` shims |
+| `package.json` | Add deps: `voyageai`, `openai` (for OpenRouter), `cohere-ai`, `vitest`; add scripts `test`, `test:integration`, `eval` |
+| `prisma/schema.prisma` | Add `Product` model + relations + `Unsupported("tsvector")` and `Unsupported("vector(1024)")` shims |
 | `app/db.server.js` | Add named exports for raw SQL helpers used by retrieval |
 | `app/routes/api.webhooks.jsx` | Add `PRODUCTS_CREATE`, `PRODUCTS_UPDATE`, `PRODUCTS_DELETE`, `INVENTORY_LEVELS_UPDATE` cases |
 | `app/services/search-router.server.js` | Rewrite as a thin orchestrator that calls the new four modules |
 | `app/services/tool.server.js` | `processProductSearchResult` simplified — input is already ranked, no re-rank needed |
 | `app/services/claude.server.js` | System prompt: remove instructions to strip brand/category from queries |
 | `shopify.app.toml` | Declare new webhook subscriptions |
-| `.env.example` | Document `OPENAI_API_KEY`, `COHERE_API_KEY`, `SYNC_SECRET`, `TEST_DATABASE_URL` |
+| `.env.example` | Document `VOYAGE_API_KEY`, `OPENROUTER_API_KEY`, `COHERE_API_KEY`, `SYNC_SECRET`, `TEST_DATABASE_URL` |
 | `PROGRESS.md` | Update phase tracker as tasks complete |
 
 ### Untouched (do not modify)
@@ -180,7 +182,7 @@ export function makeAnthropicMock(responseText) {
 }
 
 export function makeOpenAIEmbedMock(vector) {
-  const arr = Array.isArray(vector) ? vector : new Array(1536).fill(0.01);
+  const arr = Array.isArray(vector) ? vector : new Array(1024).fill(0.01);
   return {
     embeddings: {
       create: vi.fn().mockResolvedValue({
@@ -278,7 +280,7 @@ model Product {
   variants      Json     @default("[]")
   shopifyUpdatedAt DateTime?                  // Shopify's updated_at — for OOO detection
   searchTsv     Unsupported("tsvector")?      // GIN-indexed via raw SQL
-  embedding     Unsupported("vector(1536)")?  // OpenAI text-embedding-3-small
+  embedding     Unsupported("vector(1024)")?  // Voyage AI voyage-3-lite
   deletedAt     DateTime?                     // soft delete
   indexedAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -331,11 +333,12 @@ CREATE TABLE "products" (
   "variants"          JSONB NOT NULL DEFAULT '[]'::jsonb,
   "shopifyUpdatedAt"  TIMESTAMPTZ,
   "searchTsv"         tsvector,
-  "embedding"         vector(1536),
+  "embedding"         vector(1024),
   "deletedAt"         TIMESTAMPTZ,
   "indexedAt"         TIMESTAMPTZ NOT NULL DEFAULT now(),
   "updatedAt"         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- NOTE: embedding column is vector(1024) — matches Voyage voyage-3-lite output
 
 -- Btree indexes for filter columns
 CREATE INDEX "products_handle_idx"     ON "products" ("handle");
@@ -478,8 +481,13 @@ git commit -m "feat(db): add lastShownCategory and lastShownBrands to Conversati
 Append:
 
 ```
-# Embeddings + rerank (Task 4 onward)
-OPENAI_API_KEY=sk-...
+# Embeddings (Voyage AI — 200M-token free trial)
+VOYAGE_API_KEY=pa-...
+
+# LLM gateway (OpenRouter — Anthropic models proxied via OpenAI-compatible API)
+OPENROUTER_API_KEY=sk-or-v1-...
+
+# Rerank (Cohere — 1000/mo free)
 COHERE_API_KEY=...
 
 # Protects the full-sync endpoint — random 32-char string
@@ -499,13 +507,16 @@ Add at the bottom of the existing exports (do not remove existing ones):
 
 ```js
 export const RETRIEVAL_CONFIG = {
-  openaiApiKey: process.env.OPENAI_API_KEY,
+  voyageApiKey: process.env.VOYAGE_API_KEY,
+  openrouterApiKey: process.env.OPENROUTER_API_KEY,
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY, // fallback when OpenRouter is unavailable
   cohereApiKey: process.env.COHERE_API_KEY,
   syncSecret: process.env.SYNC_SECRET,
-  embeddingModel: 'text-embedding-3-small',
-  embeddingDimensions: 1536,
+  embeddingModel: 'voyage-3-lite',
+  embeddingDimensions: 1024,
   rerankModel: 'rerank-v3.5',
-  queryUnderstandingModel: 'claude-haiku-4-5-20251001',
+  // OpenRouter passes through to Anthropic models with this exact name.
+  queryUnderstandingModel: 'anthropic/claude-haiku-4-5',
   candidatePoolSize: 50,
   finalResultSize: 12,
   bm25Weight: 0.4,
@@ -514,8 +525,12 @@ export const RETRIEVAL_CONFIG = {
 
 export function assertRetrievalConfig() {
   const missing = [];
-  if (!RETRIEVAL_CONFIG.openaiApiKey) missing.push('OPENAI_API_KEY');
+  if (!RETRIEVAL_CONFIG.voyageApiKey) missing.push('VOYAGE_API_KEY');
   if (!RETRIEVAL_CONFIG.cohereApiKey) missing.push('COHERE_API_KEY');
+  // Need at least one path to Anthropic — OpenRouter (preferred) or direct.
+  if (!RETRIEVAL_CONFIG.openrouterApiKey && !RETRIEVAL_CONFIG.anthropicApiKey) {
+    missing.push('OPENROUTER_API_KEY or ANTHROPIC_API_KEY');
+  }
   if (missing.length) {
     throw new Error(`Missing required env vars: ${missing.join(', ')}`);
   }
@@ -540,21 +555,36 @@ describe('RETRIEVAL_CONFIG', () => {
   });
 
   it('reads keys from env', async () => {
-    process.env.OPENAI_API_KEY = 'openai-test';
+    process.env.VOYAGE_API_KEY = 'voyage-test';
+    process.env.OPENROUTER_API_KEY = 'or-test';
     process.env.COHERE_API_KEY = 'cohere-test';
     process.env.SYNC_SECRET = 'sync-secret';
 
     // Re-import to pick up new env (vitest caches modules)
     const mod = await import('../../app/services/config.server.js?reload=1');
-    expect(mod.RETRIEVAL_CONFIG.openaiApiKey).toBe('openai-test');
+    expect(mod.RETRIEVAL_CONFIG.voyageApiKey).toBe('voyage-test');
+    expect(mod.RETRIEVAL_CONFIG.openrouterApiKey).toBe('or-test');
     expect(mod.RETRIEVAL_CONFIG.cohereApiKey).toBe('cohere-test');
+    expect(mod.RETRIEVAL_CONFIG.embeddingModel).toBe('voyage-3-lite');
+    expect(mod.RETRIEVAL_CONFIG.embeddingDimensions).toBe(1024);
   });
 
   it('assertRetrievalConfig throws when keys missing', async () => {
-    delete process.env.OPENAI_API_KEY;
+    delete process.env.VOYAGE_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
     delete process.env.COHERE_API_KEY;
     const mod = await import('../../app/services/config.server.js?reload=2');
-    expect(() => mod.assertRetrievalConfig()).toThrow(/OPENAI_API_KEY.*COHERE_API_KEY/);
+    expect(() => mod.assertRetrievalConfig()).toThrow(/VOYAGE_API_KEY/);
+  });
+
+  it('assertRetrievalConfig accepts ANTHROPIC_API_KEY as a fallback for the LLM key', async () => {
+    process.env.VOYAGE_API_KEY = 'v';
+    process.env.COHERE_API_KEY = 'c';
+    delete process.env.OPENROUTER_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-...';
+    const mod = await import('../../app/services/config.server.js?reload=3');
+    expect(() => mod.assertRetrievalConfig()).not.toThrow();
   });
 });
 ```
@@ -576,18 +606,20 @@ git commit -m "feat(config): add retrieval-config block with required-keys asser
 
 ---
 
-## Task 5 — Embeddings client (OpenAI wrapper)
+## Task 5 — Embeddings client (Voyage AI wrapper)
 
 **Files:**
 - Create: `app/services/embeddings.server.js`
 - Create: `tests/services/embeddings.test.js`
-- Modify: `package.json` (add `openai` dep)
+- Modify: `package.json` (add `voyageai` dep)
 
-- [ ] **Step 1: Add the OpenAI SDK**
+- [ ] **Step 1: Add the Voyage AI SDK**
 
 ```powershell
-npm install openai@^4.60.0
+npm install voyageai@^0.0.3
 ```
+
+(If a newer version exists at install time, take the latest 0.0.x — Voyage's JS SDK is in early-stage versioning. The class name `VoyageAIClient` is stable.)
 
 - [ ] **Step 2: Write the failing test**
 
@@ -596,42 +628,47 @@ Create `tests/services/embeddings.test.js`:
 ```js
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('openai', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    embeddings: {
-      create: vi.fn().mockResolvedValue({
-        data: [
-          { embedding: new Array(1536).fill(0.01), index: 0 },
-          { embedding: new Array(1536).fill(0.02), index: 1 },
-        ],
-      }),
-    },
+vi.mock('voyageai', () => ({
+  VoyageAIClient: vi.fn().mockImplementation(() => ({
+    embed: vi.fn().mockResolvedValue({
+      data: [
+        { embedding: new Array(1024).fill(0.01), index: 0 },
+        { embedding: new Array(1024).fill(0.02), index: 1 },
+      ],
+      model: 'voyage-3-lite',
+      usage: { totalTokens: 10 },
+    }),
   })),
 }));
 
 describe('embeddings.server', () => {
   beforeEach(() => {
-    process.env.OPENAI_API_KEY = 'test-key';
+    process.env.VOYAGE_API_KEY = 'test-key';
   });
 
-  it('embedOne returns a 1536-dim vector', async () => {
+  it('embedOne returns a 1024-dim vector', async () => {
     const { embedOne } = await import('../../app/services/embeddings.server.js?one=1');
     const v = await embedOne('M20 cylinder');
-    expect(v).toHaveLength(1536);
+    expect(v).toHaveLength(1024);
     expect(v[0]).toBe(0.01);
   });
 
-  it('embedMany returns one vector per input', async () => {
+  it('embedMany returns one vector per input, ordered by index', async () => {
     const { embedMany } = await import('../../app/services/embeddings.server.js?many=1');
     const result = await embedMany(['a', 'b']);
     expect(result).toHaveLength(2);
-    expect(result[0]).toHaveLength(1536);
+    expect(result[0]).toHaveLength(1024);
     expect(result[1][0]).toBe(0.02);
   });
 
   it('embedOne throws clearly when text is empty', async () => {
     const { embedOne } = await import('../../app/services/embeddings.server.js?empty=1');
     await expect(embedOne('')).rejects.toThrow(/empty/i);
+  });
+
+  it('vectorToPgLiteral formats correctly for pgvector', async () => {
+    const { vectorToPgLiteral } = await import('../../app/services/embeddings.server.js?vec=1');
+    expect(vectorToPgLiteral([0.1, 0.2, 0.3])).toBe('[0.1,0.2,0.3]');
   });
 });
 ```
@@ -648,16 +685,16 @@ Expected: FAIL — `Cannot find module '../../app/services/embeddings.server.js'
 
 ```js
 // app/services/embeddings.server.js
-import OpenAI from 'openai';
+import { VoyageAIClient } from 'voyageai';
 import { RETRIEVAL_CONFIG } from './config.server.js';
 
 let client = null;
 function getClient() {
   if (!client) {
-    if (!RETRIEVAL_CONFIG.openaiApiKey) {
-      throw new Error('OPENAI_API_KEY is not configured');
+    if (!RETRIEVAL_CONFIG.voyageApiKey) {
+      throw new Error('VOYAGE_API_KEY is not configured');
     }
-    client = new OpenAI({ apiKey: RETRIEVAL_CONFIG.openaiApiKey });
+    client = new VoyageAIClient({ apiKey: RETRIEVAL_CONFIG.voyageApiKey });
   }
   return client;
 }
@@ -666,7 +703,7 @@ function clean(text) {
   if (typeof text !== 'string') throw new Error('embedding input must be a string');
   const t = text.trim();
   if (!t) throw new Error('embedding input is empty');
-  // OpenAI's max input is 8191 tokens — generous-truncate to 24000 chars to be safe.
+  // voyage-3-lite max input is 32k tokens per item; truncate at 24k chars for safety.
   return t.length > 24000 ? t.slice(0, 24000) : t;
 }
 
@@ -677,7 +714,8 @@ async function withRetry(fn, attempts = 3) {
       return await fn();
     } catch (err) {
       lastErr = err;
-      const isRetryable = err?.status === 429 || (err?.status >= 500 && err?.status < 600);
+      const status = err?.statusCode || err?.status;
+      const isRetryable = status === 429 || (status >= 500 && status < 600);
       if (!isRetryable || i === attempts - 1) throw err;
       await new Promise(r => setTimeout(r, 250 * Math.pow(2, i)));
     }
@@ -685,32 +723,42 @@ async function withRetry(fn, attempts = 3) {
   throw lastErr;
 }
 
-export async function embedOne(text) {
+/**
+ * Embed a single text. inputType="query" gives better retrieval-side embedding
+ * quality on Voyage's evaluation; "document" is for indexed content.
+ */
+export async function embedOne(text, { inputType = 'query' } = {}) {
   const input = clean(text);
   const result = await withRetry(() =>
-    getClient().embeddings.create({
+    getClient().embed({
       model: RETRIEVAL_CONFIG.embeddingModel,
-      input,
+      input: [input],
+      inputType,
     })
   );
   return result.data[0].embedding;
 }
 
-export async function embedMany(texts) {
+/**
+ * Embed many texts in chunks. inputType defaults to "document" — this is the
+ * call used during ingestion. Pass inputType: "query" if embedding a batch of
+ * user-side queries.
+ */
+export async function embedMany(texts, { inputType = 'document' } = {}) {
   if (!Array.isArray(texts) || texts.length === 0) return [];
   const inputs = texts.map(clean);
-  // OpenAI supports batches up to 2048; chunk to be safe.
+  // Voyage allows 128 inputs per call for voyage-3-lite.
   const chunks = [];
-  for (let i = 0; i < inputs.length; i += 200) chunks.push(inputs.slice(i, i + 200));
+  for (let i = 0; i < inputs.length; i += 100) chunks.push(inputs.slice(i, i + 100));
   const all = [];
   for (const chunk of chunks) {
     const r = await withRetry(() =>
-      getClient().embeddings.create({
+      getClient().embed({
         model: RETRIEVAL_CONFIG.embeddingModel,
         input: chunk,
+        inputType,
       })
     );
-    // Order is guaranteed by `index` in the response.
     const ordered = r.data
       .slice()
       .sort((a, b) => a.index - b.index)
@@ -732,13 +780,13 @@ export function vectorToPgLiteral(vec) {
 npm test -- tests/services/embeddings.test.js
 ```
 
-Expected: 3 passing tests.
+Expected: 4 passing tests.
 
 - [ ] **Step 5: Commit**
 
 ```powershell
 git add package.json package-lock.json app/services/embeddings.server.js tests/services/embeddings.test.js
-git commit -m "feat(embeddings): add OpenAI text-embedding-3-small client with retry"
+git commit -m "feat(embeddings): add Voyage AI voyage-3-lite client with retry and inputType support"
 ```
 
 ---
@@ -1006,7 +1054,7 @@ describe(skipIfNotIntegration('product-index.server'), () => {
   itInt('upserts a new product and stores its embedding', async () => {
     const { upsertProductFromShopify } = await import('../../app/services/product-index.server.js');
     // We pass an injected embedder so the test doesn't call OpenAI
-    const fakeEmbed = async () => new Array(1536).fill(0.01);
+    const fakeEmbed = async () => new Array(1024).fill(0.01);
     await upsertProductFromShopify(fixture, { embedOne: fakeEmbed });
 
     const db = getTestPrisma();
@@ -1018,7 +1066,7 @@ describe(skipIfNotIntegration('product-index.server'), () => {
 
   itInt('upsert is idempotent for the same payload', async () => {
     const { upsertProductFromShopify } = await import('../../app/services/product-index.server.js');
-    const fakeEmbed = async () => new Array(1536).fill(0.01);
+    const fakeEmbed = async () => new Array(1024).fill(0.01);
     await upsertProductFromShopify(fixture, { embedOne: fakeEmbed });
     await upsertProductFromShopify(fixture, { embedOne: fakeEmbed });
 
@@ -1029,7 +1077,7 @@ describe(skipIfNotIntegration('product-index.server'), () => {
 
   itInt('skips upsert when incoming shopifyUpdatedAt is older than stored', async () => {
     const { upsertProductFromShopify } = await import('../../app/services/product-index.server.js');
-    const fakeEmbed = async () => new Array(1536).fill(0.01);
+    const fakeEmbed = async () => new Array(1024).fill(0.01);
 
     const newer = { ...fixture, updatedAt: '2026-04-30T12:00:00Z' };
     const older = { ...fixture, title: 'STALE', updatedAt: '2026-04-29T12:00:00Z' };
@@ -1046,7 +1094,7 @@ describe(skipIfNotIntegration('product-index.server'), () => {
     const { upsertProductFromShopify, softDeleteProduct } = await import(
       '../../app/services/product-index.server.js'
     );
-    const fakeEmbed = async () => new Array(1536).fill(0.01);
+    const fakeEmbed = async () => new Array(1024).fill(0.01);
     await upsertProductFromShopify(fixture, { embedOne: fakeEmbed });
     await softDeleteProduct(fixture.id);
 
@@ -1290,7 +1338,7 @@ export function makeAdminClient({ shopDomain, accessToken, apiVersion = '2025-01
 //   $env:SHOPIFY_SHOP_DOMAIN="creativeautomation.myshopify.com"
 //   $env:SHOPIFY_ADMIN_TOKEN="shpat_..."
 //   $env:DATABASE_URL="<railway public postgres url>"
-//   $env:OPENAI_API_KEY="sk-..."
+//   $env:VOYAGE_API_KEY="pa-..."
 //   node scripts/bootstrap-index.js
 //
 // Safe to re-run: upserts are idempotent and out-of-order-safe.
@@ -1302,7 +1350,7 @@ import { embedMany } from '../app/services/embeddings.server.js';
 import { extractProductRow } from '../app/services/product-extractor.server.js';
 import prisma from '../app/db.server.js';
 
-const REQUIRED_ENV = ['SHOPIFY_SHOP_DOMAIN', 'SHOPIFY_ADMIN_TOKEN', 'DATABASE_URL', 'OPENAI_API_KEY'];
+const REQUIRED_ENV = ['SHOPIFY_SHOP_DOMAIN', 'SHOPIFY_ADMIN_TOKEN', 'DATABASE_URL', 'VOYAGE_API_KEY'];
 for (const k of REQUIRED_ENV) {
   if (!process.env[k]) {
     console.error(`Missing required env: ${k}`);
@@ -1327,7 +1375,8 @@ async function main() {
     // Pre-extract rows so we can batch-embed.
     const rows = products.map(extractProductRow);
     const texts = rows.map(r => r.textForEmbedding);
-    const vectors = await embedMany(texts);
+    // inputType: 'document' — these are catalog entries, not user queries.
+    const vectors = await embedMany(texts, { inputType: 'document' });
 
     // Inject each precomputed embedding into upsert via a wrapper.
     for (let i = 0; i < products.length; i++) {
@@ -1360,7 +1409,7 @@ Temporarily edit `scripts/bootstrap-index.js` line `for await (const products of
 $env:SHOPIFY_SHOP_DOMAIN="<your-myshopify-domain>"
 $env:SHOPIFY_ADMIN_TOKEN="<admin-api-token>"
 $env:DATABASE_URL="<railway-DATABASE_PUBLIC_URL>"
-$env:OPENAI_API_KEY="<sk-...>"
+$env:VOYAGE_API_KEY="<pa-...>"
 node scripts/bootstrap-index.js
 ```
 
@@ -1863,7 +1912,7 @@ describe(skipIfNotIntegration('retrieval.server'), () => {
 });
 
 function cylinderVec() {
-  const v = new Array(1536).fill(0);
+  const v = new Array(1024).fill(0);
   v[0] = 1;
   return v;
 }
@@ -1875,7 +1924,7 @@ Also create the seed helper `tests/services/_seed_retrieval.js`:
 import prisma from '../../app/db.server.js';
 
 function vec(i) {
-  const v = new Array(1536).fill(0);
+  const v = new Array(1024).fill(0);
   v[i] = 1;
   return `[${v.join(',')}]`;
 }
@@ -1926,7 +1975,7 @@ import { RETRIEVAL_CONFIG } from './config.server.js';
  * @param {string[]}    intent.brand_exclude
  * @param {object}      intent.specs (jsonb-containment filter; v1: ignored)
  * @param {string}      intent.free_text
- * @param {number[]}    intent.query_vector  (1536 dims)
+ * @param {number[]}    intent.query_vector  (1024 dims)
  * @returns {Promise<Array<row>>} up to RETRIEVAL_CONFIG.candidatePoolSize rows
  */
 export async function hybridSearch(intent) {
@@ -2174,47 +2223,215 @@ git commit -m "feat(rerank): add Cohere rerank-v3.5 wrapper with graceful fallba
 
 ---
 
-## Task 13 — Query understanding service (Haiku intent extraction)
+## Task 13 — Query understanding service (Haiku intent extraction via OpenRouter)
 
 **Files:**
+- Create: `app/services/llm.server.js` (shared OpenRouter → Anthropic gateway)
 - Create: `app/services/query-understanding.server.js`
+- Create: `tests/services/llm.test.js`
 - Create: `tests/services/query-understanding.test.js`
 
-- [ ] **Step 1: Write the failing test**
+**Why a shared gateway:** both query-understanding (Haiku) and the final-reply path (Sonnet in `claude.server.js`) will route through OpenRouter using an OpenAI-compatible chat-completions endpoint. The Anthropic SDK does not support arbitrary base URLs, so we use the OpenAI SDK pointed at `https://openrouter.ai/api/v1`. Centralising this in `llm.server.js` means Task 17 reuses the same gateway with no extra wiring.
+
+- [ ] **Step 1a: Write the failing test for `llm.server.js`**
+
+Create `tests/services/llm.test.js`:
+
+```js
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const openaiInstance = { chat: { completions: { create: vi.fn() } } };
+
+vi.mock('openai', () => ({
+  default: vi.fn().mockImplementation(() => openaiInstance),
+  OpenAI: vi.fn().mockImplementation(() => openaiInstance),
+}));
+
+describe('llm.server (OpenRouter-via-OpenAI-SDK gateway)', () => {
+  beforeEach(() => {
+    openaiInstance.chat.completions.create.mockReset();
+    process.env.OPENROUTER_API_KEY = 'or-test';
+    delete process.env.ANTHROPIC_API_KEY;
+  });
+
+  it('chatJson returns parsed JSON from the model response', async () => {
+    openaiInstance.chat.completions.create.mockResolvedValue({
+      choices: [{ message: { content: '{"category":"X","brand_include":[],"brand_exclude":[],"specs":{},"free_text":"q"}' } }],
+    });
+    const { chatJson } = await import('../../app/services/llm.server.js?one=1');
+    const out = await chatJson({
+      model: 'anthropic/claude-haiku-4-5',
+      system: 'sys',
+      user: 'msg',
+      maxTokens: 256,
+    });
+    expect(out.category).toBe('X');
+  });
+
+  it('chatJson returns null on invalid JSON', async () => {
+    openaiInstance.chat.completions.create.mockResolvedValue({
+      choices: [{ message: { content: 'not json' } }],
+    });
+    const { chatJson } = await import('../../app/services/llm.server.js?two=2');
+    const out = await chatJson({ model: 'x', system: 's', user: 'u' });
+    expect(out).toBeNull();
+  });
+
+  it('throws when neither OPENROUTER_API_KEY nor ANTHROPIC_API_KEY is set', async () => {
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    const { chatJson } = await import('../../app/services/llm.server.js?three=3');
+    await expect(chatJson({ model: 'x', system: 's', user: 'u' })).rejects.toThrow(/OPENROUTER_API_KEY|ANTHROPIC_API_KEY/);
+  });
+});
+```
+
+Run:
+
+```powershell
+npm test -- tests/services/llm.test.js
+```
+
+Expected: FAIL — module not found.
+
+- [ ] **Step 1b: Implement `app/services/llm.server.js`**
+
+```js
+// app/services/llm.server.js
+//
+// Single gateway for all LLM calls. Routes through OpenRouter via the
+// OpenAI-compatible chat-completions API. Falls back to direct Anthropic
+// only if OPENROUTER_API_KEY is missing AND a direct ANTHROPIC_API_KEY is
+// available (for future direct-Anthropic mode).
+//
+// Models are passed as OpenRouter-format strings:
+//   - 'anthropic/claude-haiku-4-5'
+//   - 'anthropic/claude-sonnet-4-6'
+
+import OpenAI from 'openai';
+import { RETRIEVAL_CONFIG } from './config.server.js';
+
+let client = null;
+
+function getClient() {
+  if (client) return client;
+  if (RETRIEVAL_CONFIG.openrouterApiKey) {
+    client = new OpenAI({
+      apiKey: RETRIEVAL_CONFIG.openrouterApiKey,
+      baseURL: 'https://openrouter.ai/api/v1',
+      defaultHeaders: {
+        // OpenRouter recommends these for analytics; harmless if omitted.
+        'HTTP-Referer': 'https://creativeautomation.ae',
+        'X-Title': 'Creative Automation Chatbot',
+      },
+    });
+    return client;
+  }
+  throw new Error(
+    'No LLM credential configured. Set OPENROUTER_API_KEY (preferred) or ANTHROPIC_API_KEY.'
+  );
+}
+
+function safeParseJson(text) {
+  if (typeof text !== 'string') return null;
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Chat completion returning parsed JSON (or null on parse failure).
+ *
+ * @param {object} args
+ * @param {string} args.model       e.g. 'anthropic/claude-haiku-4-5'
+ * @param {string} args.system      system prompt
+ * @param {string} args.user        single user-turn content
+ * @param {number} [args.maxTokens] default 512
+ * @param {number} [args.temperature] default 0
+ * @param {number} [args.timeoutMs]  default 5000
+ */
+export async function chatJson({ model, system, user, maxTokens = 512, temperature = 0, timeoutMs = 5000 }) {
+  const c = getClient();
+  const response = await Promise.race([
+    c.chat.completions.create({
+      model,
+      max_tokens: maxTokens,
+      temperature,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+    }),
+    new Promise((_, r) => setTimeout(() => r(new Error('llm timeout')), timeoutMs)),
+  ]);
+  const text = response?.choices?.[0]?.message?.content ?? '';
+  return safeParseJson(text);
+}
+
+/**
+ * Streaming chat completion. Returns the async iterable from the OpenAI SDK
+ * so the caller can pipe tokens to the user. Use this for the user-facing
+ * reply (Sonnet) where streaming UX matters.
+ *
+ * @param {object} args
+ * @param {string} args.model
+ * @param {string} args.system
+ * @param {Array<{role: string, content: string}>} args.messages
+ * @param {Array} [args.tools]
+ * @param {number} [args.maxTokens]
+ */
+export async function chatStream({ model, system, messages, tools, maxTokens = 4096 }) {
+  const c = getClient();
+  return c.chat.completions.create({
+    model,
+    max_tokens: maxTokens,
+    stream: true,
+    messages: [
+      { role: 'system', content: system },
+      ...messages,
+    ],
+    ...(tools && tools.length ? { tools } : {}),
+  });
+}
+```
+
+- [ ] **Step 1c: Run llm tests, expect pass**
+
+```powershell
+npm test -- tests/services/llm.test.js
+```
+
+Expected: 3 passing tests.
+
+- [ ] **Step 2: Write the failing test for query-understanding**
 
 Create `tests/services/query-understanding.test.js`:
 
 ```js
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const anthropicInstance = { messages: { create: vi.fn() } };
-
-vi.mock('@anthropic-ai/sdk', () => ({
-  default: vi.fn().mockImplementation(() => anthropicInstance),
-  Anthropic: vi.fn().mockImplementation(() => anthropicInstance),
+vi.mock('../../app/services/llm.server.js', () => ({
+  chatJson: vi.fn(),
 }));
 
-function jsonReply(obj) {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(obj) }],
-    stop_reason: 'end_turn',
-  };
-}
+import * as llm from '../../app/services/llm.server.js';
 
 describe('extractIntent', () => {
   beforeEach(() => {
-    anthropicInstance.messages.create.mockReset();
-    process.env.ANTHROPIC_API_KEY = 'test-key';
+    llm.chatJson.mockReset();
   });
 
   it('extracts category + brand_exclude when user says "another brand"', async () => {
-    anthropicInstance.messages.create.mockResolvedValue(jsonReply({
+    llm.chatJson.mockResolvedValue({
       category: 'Pneumatic Cylinder',
       brand_include: [],
       brand_exclude: ['Festo'],
       specs: {},
       free_text: 'M20 cylinder',
-    }));
+    });
 
     const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=1');
     const intent = await extractIntent({
@@ -2232,13 +2449,13 @@ describe('extractIntent', () => {
   });
 
   it('extracts category + brand_include when user specifies brand', async () => {
-    anthropicInstance.messages.create.mockResolvedValue(jsonReply({
+    llm.chatJson.mockResolvedValue({
       category: 'Circuit Breaker',
       brand_include: ['ABB'],
       brand_exclude: [],
       specs: {},
       free_text: 'circuit breaker',
-    }));
+    });
 
     const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=2');
     const intent = await extractIntent({
@@ -2249,10 +2466,7 @@ describe('extractIntent', () => {
   });
 
   it('returns null filters and raw free_text on parse failure', async () => {
-    anthropicInstance.messages.create.mockResolvedValue({
-      content: [{ type: 'text', text: 'this is not valid json' }],
-      stop_reason: 'end_turn',
-    });
+    llm.chatJson.mockResolvedValue(null); // simulates a failed JSON parse
 
     const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=3');
     const intent = await extractIntent({
@@ -2264,8 +2478,8 @@ describe('extractIntent', () => {
     expect(intent.free_text).toBe('some query');
   });
 
-  it('returns fallback intent on API error', async () => {
-    anthropicInstance.messages.create.mockRejectedValue(new Error('boom'));
+  it('returns fallback intent on LLM error', async () => {
+    llm.chatJson.mockRejectedValue(new Error('boom'));
 
     const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=4');
     const intent = await extractIntent({
@@ -2290,14 +2504,8 @@ Expected: FAIL — module not found.
 
 ```js
 // app/services/query-understanding.server.js
-import Anthropic from '@anthropic-ai/sdk';
+import { chatJson } from './llm.server.js';
 import { RETRIEVAL_CONFIG } from './config.server.js';
-
-let client = null;
-function getClient() {
-  if (!client) client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  return client;
-}
 
 const SYSTEM_PROMPT = `You are a query-understanding component for an industrial-automation e-commerce chatbot.
 
@@ -2332,16 +2540,6 @@ function buildUserMessage({ messages, lastShownCategory, lastShownBrands }) {
   return `Conversation transcript:\n${transcript}${hint}\n\nReturn the JSON object now.`;
 }
 
-function safeParse(text) {
-  if (typeof text !== 'string') return null;
-  const trimmed = text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return null;
-  }
-}
-
 function fallbackIntent(rawMessage) {
   return {
     category: null,
@@ -2366,19 +2564,14 @@ function normalize(parsed, rawMessage) {
 export async function extractIntent({ messages, lastShownCategory = null, lastShownBrands = [] }) {
   const rawMessage = messages?.[messages.length - 1]?.content ?? '';
   try {
-    const response = await Promise.race([
-      getClient().messages.create({
-        model: RETRIEVAL_CONFIG.queryUnderstandingModel,
-        max_tokens: 256,
-        temperature: 0,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: buildUserMessage({ messages, lastShownCategory, lastShownBrands }) }],
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('haiku timeout')), 5000)),
-    ]);
-
-    const text = response.content?.find(c => c.type === 'text')?.text || '';
-    const parsed = safeParse(text);
+    const parsed = await chatJson({
+      model: RETRIEVAL_CONFIG.queryUnderstandingModel,
+      system: SYSTEM_PROMPT,
+      user: buildUserMessage({ messages, lastShownCategory, lastShownBrands }),
+      maxTokens: 256,
+      temperature: 0,
+      timeoutMs: 5000,
+    });
     return normalize(parsed, rawMessage);
   } catch (err) {
     console.warn('[query-understanding] failed, using fallback:', err.message);
@@ -2451,7 +2644,7 @@ describe('smartSearch (v6 orchestrator)', () => {
       specs: {},
       free_text: 'M20 cylinder',
     });
-    mods.em.embedOne.mockResolvedValue(new Array(1536).fill(0.01));
+    mods.em.embedOne.mockResolvedValue(new Array(1024).fill(0.01));
     mods.re.hybridSearch.mockResolvedValue([
       { id: '1', title: 'SMC', vendor: 'SMC' },
       { id: '2', title: 'Norgren', vendor: 'Norgren' },
@@ -2481,7 +2674,7 @@ describe('smartSearch (v6 orchestrator)', () => {
       specs: {},
       free_text: 'nonsense xyz',
     });
-    mods.em.embedOne.mockResolvedValue(new Array(1536).fill(0.01));
+    mods.em.embedOne.mockResolvedValue(new Array(1024).fill(0.01));
     mods.re.hybridSearch.mockResolvedValue([]);
     mods.rk.rerank.mockResolvedValue([]);
 
@@ -2499,7 +2692,7 @@ describe('smartSearch (v6 orchestrator)', () => {
       specs: {},
       free_text: 'x',
     });
-    mods.em.embedOne.mockResolvedValue(new Array(1536).fill(0.01));
+    mods.em.embedOne.mockResolvedValue(new Array(1024).fill(0.01));
     mods.re.hybridSearch.mockResolvedValue([{ id: '1', title: 'A' }]);
     mods.rk.rerank.mockResolvedValue([{ id: '1', title: 'A' }]); // rerank module handles its own fallback
 

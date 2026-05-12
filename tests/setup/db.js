@@ -1,5 +1,6 @@
 // tests/setup/db.js
 import { PrismaClient } from '@prisma/client';
+import { it, describe } from 'vitest';
 
 let prisma = null;
 
@@ -30,6 +31,9 @@ export async function disconnectTestPrisma() {
   }
 }
 
-export function skipIfNotIntegration(name) {
-  return process.env.INTEGRATION === '1' ? name : `${name} [SKIPPED — set INTEGRATION=1]`;
-}
+// Use these in integration-only tests. Unlike a name-prefix helper, these
+// actually skip the test body — preventing getTestPrisma() from throwing on
+// machines without INTEGRATION=1.
+const isIntegration = process.env.INTEGRATION === '1';
+export const integrationIt = it.skipIf(!isIntegration);
+export const integrationDescribe = describe.skipIf(!isIntegration);
