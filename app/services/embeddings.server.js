@@ -1,16 +1,39 @@
 // app/services/embeddings.server.js
-import { VoyageAIClient } from 'voyageai';
+//
+// Direct REST call to Voyage AI. The installed `voyageai` JS SDK (0.0.3) is
+// pre-voyage-3 era and silently drops `output_dimension`, so we hit the HTTP
+// endpoint ourselves and pass the param in snake_case as the API expects.
+
 import { RETRIEVAL_CONFIG } from './config.server.js';
 
-let client = null;
-function getClient() {
-  if (!client) {
-    if (!RETRIEVAL_CONFIG.voyageApiKey) {
-      throw new Error('VOYAGE_API_KEY is not configured');
-    }
-    client = new VoyageAIClient({ apiKey: RETRIEVAL_CONFIG.voyageApiKey });
+const VOYAGE_EMBED_URL = 'https://api.voyageai.com/v1/embeddings';
+
+async function voyageEmbed({ input, model, inputType, outputDimension }) {
+  if (!RETRIEVAL_CONFIG.voyageApiKey) {
+    throw new Error('VOYAGE_API_KEY is not configured');
   }
-  return client;
+  const body = {
+    input,
+    model,
+    output_dimension: outputDimension,
+  };
+  if (inputType) body.input_type = inputType;
+
+  const res = await fetch(VOYAGE_EMBED_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RETRIEVAL_CONFIG.voyageApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    const err = new Error(`Voyage ${res.status}: ${text.slice(0, 500)}`);
+    err.statusCode = res.status;
+    throw err;
+  }
+  return res.json();
 }
 
 function clean(text) {
@@ -44,10 +67,11 @@ async function withRetry(fn, attempts = 3) {
 export async function embedOne(text, { inputType = 'query' } = {}) {
   const input = clean(text);
   const result = await withRetry(() =>
-    getClient().embed({
+    voyageEmbed({
       model: RETRIEVAL_CONFIG.embeddingModel,
       input: [input],
       inputType,
+      outputDimension: RETRIEVAL_CONFIG.embeddingDimensions,
     })
   );
   return result.data[0].embedding;
@@ -67,10 +91,11 @@ export async function embedMany(texts, { inputType = 'document' } = {}) {
   const all = [];
   for (const chunk of chunks) {
     const r = await withRetry(() =>
-      getClient().embed({
+      voyageEmbed({
         model: RETRIEVAL_CONFIG.embeddingModel,
         input: chunk,
         inputType,
+        outputDimension: RETRIEVAL_CONFIG.embeddingDimensions,
       })
     );
     const ordered = r.data

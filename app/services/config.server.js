@@ -37,7 +37,9 @@ export const RETRIEVAL_CONFIG = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY, // fallback when OpenRouter is unavailable
   cohereApiKey: process.env.COHERE_API_KEY,
   syncSecret: process.env.SYNC_SECRET,
-  embeddingModel: 'voyage-3-lite',
+  // voyage-3.5-lite — same price as voyage-3-lite, same 200M free trial, but
+  // supports configurable output_dimension. voyage-3-lite is locked at 512.
+  embeddingModel: 'voyage-3.5-lite',
   embeddingDimensions: 1024,
   rerankModel: 'rerank-v3.5',
   // OpenRouter passes through to Anthropic models with this exact name.

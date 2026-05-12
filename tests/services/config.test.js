@@ -21,7 +21,7 @@ describe('RETRIEVAL_CONFIG', () => {
     expect(mod.RETRIEVAL_CONFIG.voyageApiKey).toBe('voyage-test');
     expect(mod.RETRIEVAL_CONFIG.openrouterApiKey).toBe('or-test');
     expect(mod.RETRIEVAL_CONFIG.cohereApiKey).toBe('cohere-test');
-    expect(mod.RETRIEVAL_CONFIG.embeddingModel).toBe('voyage-3-lite');
+    expect(mod.RETRIEVAL_CONFIG.embeddingModel).toBe('voyage-3.5-lite');
     expect(mod.RETRIEVAL_CONFIG.embeddingDimensions).toBe(1024);
     expect(mod.RETRIEVAL_CONFIG.queryUnderstandingModel).toBe('anthropic/claude-haiku-4-5');
   });
