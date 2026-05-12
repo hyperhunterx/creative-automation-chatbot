@@ -30,3 +30,33 @@ export const AppConfig = {
 };
 
 export default AppConfig;
+
+export const RETRIEVAL_CONFIG = {
+  voyageApiKey: process.env.VOYAGE_API_KEY,
+  openrouterApiKey: process.env.OPENROUTER_API_KEY,
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY, // fallback when OpenRouter is unavailable
+  cohereApiKey: process.env.COHERE_API_KEY,
+  syncSecret: process.env.SYNC_SECRET,
+  embeddingModel: 'voyage-3-lite',
+  embeddingDimensions: 1024,
+  rerankModel: 'rerank-v3.5',
+  // OpenRouter passes through to Anthropic models with this exact name.
+  queryUnderstandingModel: 'anthropic/claude-haiku-4-5',
+  candidatePoolSize: 50,
+  finalResultSize: 12,
+  bm25Weight: 0.4,
+  vectorWeight: 0.6,
+};
+
+export function assertRetrievalConfig() {
+  const missing = [];
+  if (!RETRIEVAL_CONFIG.voyageApiKey) missing.push('VOYAGE_API_KEY');
+  if (!RETRIEVAL_CONFIG.cohereApiKey) missing.push('COHERE_API_KEY');
+  // Need at least one path to Anthropic — OpenRouter (preferred) or direct.
+  if (!RETRIEVAL_CONFIG.openrouterApiKey && !RETRIEVAL_CONFIG.anthropicApiKey) {
+    missing.push('OPENROUTER_API_KEY or ANTHROPIC_API_KEY');
+  }
+  if (missing.length) {
+    throw new Error(`Missing required env vars: ${missing.join(', ')}`);
+  }
+}
