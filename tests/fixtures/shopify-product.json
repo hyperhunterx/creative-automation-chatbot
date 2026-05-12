@@ -1,0 +1,27 @@
+{
+  "id": "gid://shopify/Product/8123456789",
+  "handle": "festo-dsnu-20-50-p-a",
+  "title": "Festo DSNU-20-50-P-A ISO 6432 Pneumatic Cylinder",
+  "vendor": "Festo",
+  "productType": "Pneumatic Cylinder",
+  "tags": ["pneumatic", "cylinder", "ISO-6432", "festo"],
+  "descriptionHtml": "<p>Round body, magnetic piston. Bore 20mm, stroke 50mm.</p><ul><li>Operating pressure 1-10 bar</li></ul>",
+  "featuredMedia": {
+    "preview": { "image": { "url": "https://cdn.shopify.com/.../dsnu-20-50.jpg" } }
+  },
+  "updatedAt": "2026-04-30T12:00:00Z",
+  "priceRangeV2": {
+    "minVariantPrice": { "amount": "210.00", "currencyCode": "AED" },
+    "maxVariantPrice": { "amount": "210.00", "currencyCode": "AED" }
+  },
+  "variants": {
+    "nodes": [
+      {
+        "id": "gid://shopify/ProductVariant/411",
+        "sku": "DSNU-20-50-P-A",
+        "price": "210.00",
+        "availableForSale": true
+      }
+    ]
+  }
+}
