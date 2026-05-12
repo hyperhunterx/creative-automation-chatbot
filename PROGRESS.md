@@ -17,15 +17,15 @@
 
 ```
 Phase 0  Brainstorming & design               [██████████] 100% — PLAN.md written
-Phase 1  Implementation plan (writing-plans)  [░░░░░░░░░░]   0% — next step
-Phase 2  Schema + bootstrap script            [░░░░░░░░░░]   0%
-Phase 3  Ingestion (webhooks + cron)          [░░░░░░░░░░]   0%
-Phase 4  Retrieval module                     [░░░░░░░░░░]   0%
-Phase 5  Query understanding module           [░░░░░░░░░░]   0%
-Phase 6  Rerank module                        [░░░░░░░░░░]   0%
-Phase 7  Wire into chat.jsx                   [░░░░░░░░░░]   0%
-Phase 8  Eval set + QA                        [░░░░░░░░░░]   0%
-Phase 9  Ship to production                   [░░░░░░░░░░]   0%
+Phase 1  Implementation plan (writing-plans)  [██████████] 100% — 21 tasks, ~110 steps
+Phase 2  Schema migrations                    [████████░░]  80% — files written + prisma generated; APPLY pending DATABASE_URL
+Phase 3  Ingestion (webhooks + cron)          [████████░░]  80% — code complete; cron config pending (Task 20)
+Phase 4  Retrieval module                     [██████████] 100% — hybridSearch in app/services/retrieval.server.js
+Phase 5  Query understanding module           [██████████] 100% — Haiku via OpenRouter via app/services/llm.server.js
+Phase 6  Rerank module                        [██████████] 100% — Cohere wrapper with fallback
+Phase 7  Wire into chat.jsx                   [██████████] 100% — smartSearch v6 orchestrator + lastShown persistence
+Phase 8  Eval set + QA                        [████░░░░░░]  40% — 5 baseline cases written; running requires real keys + DB
+Phase 9  Ship to production                   [░░░░░░░░░░]   0% — pending user actions (Tasks 19–21)
 ```
 
 ## Checklist (in order)
