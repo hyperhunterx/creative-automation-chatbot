@@ -13,6 +13,7 @@ describe('extractIntent', () => {
 
   it('extracts category + brand_exclude when user says "another brand"', async () => {
     llm.chatJson.mockResolvedValue({
+      is_search: true,
       category: 'pneumatic guided cylinders',
       brand_include: [],
       brand_exclude: ['festo'],
@@ -31,8 +32,42 @@ describe('extractIntent', () => {
       lastShownBrands: ['festo'],
     });
 
+    expect(intent.is_search).toBe(true);
     expect(intent.category).toBe('pneumatic guided cylinders');
     expect(intent.brand_exclude).toEqual(['festo']);
+  });
+
+  it('parses is_search=false for greetings / off-topic questions', async () => {
+    llm.chatJson.mockResolvedValue({
+      is_search: false,
+      category: null,
+      brand_include: [],
+      brand_exclude: [],
+      specs: {},
+      free_text: 'what time is it in india right now',
+    });
+    const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=is_search_false');
+    const intent = await extractIntent({
+      messages: [{ role: 'user', content: 'what time is it in india right now' }],
+    });
+    expect(intent.is_search).toBe(false);
+    expect(intent.category).toBeNull();
+    expect(intent.brand_include).toEqual([]);
+  });
+
+  it('defaults is_search=true when the LLM omits the field', async () => {
+    llm.chatJson.mockResolvedValue({
+      category: 'cables',
+      brand_include: [],
+      brand_exclude: [],
+      specs: {},
+      free_text: 'cables',
+    });
+    const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=is_search_default');
+    const intent = await extractIntent({
+      messages: [{ role: 'user', content: 'cables' }],
+    });
+    expect(intent.is_search).toBe(true);
   });
 
   it('extracts category + brand_include when user specifies brand', async () => {

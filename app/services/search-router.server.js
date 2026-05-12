@@ -42,21 +42,22 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   const intent = await extractIntent({ messages, lastShownCategory, lastShownBrands });
   const t1Ms = Date.now() - t1;
 
-  // Early-exit: if the LLM returned an empty intent (no category, no brands,
-  // no specs) AND the user message is short / greeting-shaped, skip retrieval.
-  // The chat layer will let Claude respond conversationally with no product cards.
-  if (
+  // Early-exit on non-search turns.
+  //  Primary:  the LLM's is_search flag — handles arbitrary chit-chat / off-topic
+  //  Fallback: a conservative greeting regex — used when the LLM is unreachable
+  //            and we got a fallbackIntent (which defaults is_search=true)
+  const intentEmpty =
     !intent.category
     && (!intent.brand_include || intent.brand_include.length === 0)
     && (!intent.brand_exclude || intent.brand_exclude.length === 0)
-    && (!intent.specs || Object.keys(intent.specs).length === 0)
-    && isLikelyNonSearch(intent.free_text)
-  ) {
+    && (!intent.specs || Object.keys(intent.specs).length === 0);
+
+  if (intent.is_search === false || (intentEmpty && isLikelyNonSearch(intent.free_text))) {
     emit('chat_turn_completed', {
       total_ms: Date.now() - startedAt,
       qu_ms: t1Ms, embed_ms: 0, retrieval_ms: 0, rerank_ms: 0,
       candidates: 0, returned: 0, embed_fallback: false,
-      skipped: 'non_search',
+      skipped: intent.is_search === false ? 'non_search_llm' : 'non_search_regex',
     });
     return {
       products: [],

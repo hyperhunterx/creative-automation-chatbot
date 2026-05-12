@@ -97,4 +97,26 @@ describe('smartSearch (v6 orchestrator)', () => {
     expect(out.searchType).toBe('empty_input');
     expect(out.products).toEqual([]);
   });
+
+  it('short-circuits when LLM says is_search=false (off-topic)', async () => {
+    mods.em.embedOne.mockClear();
+    mods.re.hybridSearch.mockClear();
+    mods.rk.rerank.mockClear();
+    mods.qu.extractIntent.mockResolvedValue({
+      is_search: false,
+      category: null,
+      brand_include: [],
+      brand_exclude: [],
+      specs: {},
+      free_text: 'what time is it in india right now',
+    });
+    const { smartSearch } = await import('../../app/services/search-router.server.js?case=5');
+    const out = await smartSearch({
+      messages: [{ role: 'user', content: 'what time is it in india right now' }],
+    });
+    expect(out.searchType).toBe('non_search');
+    expect(out.products).toEqual([]);
+    expect(mods.em.embedOne).not.toHaveBeenCalled();
+    expect(mods.re.hybridSearch).not.toHaveBeenCalled();
+  });
 });
