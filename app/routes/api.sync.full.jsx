@@ -9,7 +9,7 @@
 //   - Products that exist in our index but not on Shopify are soft-deleted.
 //   - Returns a JSON summary on success.
 
-import { makeAdminClient } from "../services/admin-shopify.server.js";
+import { makeStorefrontClient } from "../services/storefront-paginate.server.js";
 import { upsertProductFromShopify, softDeleteProduct, getIndexedShopifyIds } from "../services/product-index.server.js";
 import { embedMany } from "../services/embeddings.server.js";
 import { extractProductRow } from "../services/product-extractor.server.js";
@@ -26,13 +26,13 @@ export const action = async ({ request }) => {
   }
 
   const shopDomain = process.env.SHOPIFY_SHOP_DOMAIN;
-  const accessToken = process.env.SHOPIFY_ADMIN_TOKEN;
-  if (!shopDomain || !accessToken) {
+  const storefrontToken = process.env.SHOPIFY_STOREFRONT_TOKEN;
+  if (!shopDomain || !storefrontToken) {
     return new Response('Shopify credentials missing', { status: 500 });
   }
 
   const startedAt = Date.now();
-  const client = makeAdminClient({ shopDomain, accessToken });
+  const client = makeStorefrontClient({ shopDomain, storefrontToken });
 
   const seenIds = new Set();
   let total = 0;

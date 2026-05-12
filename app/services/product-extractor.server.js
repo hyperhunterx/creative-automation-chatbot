@@ -47,11 +47,13 @@ export function extractProductRow(shopifyProduct) {
   // If we ever need a case-normalized variant for embedding, build it separately.
   const description = stripHtml(p.descriptionHtml || p.description || '');
 
-  const priceMin = p.priceRangeV2?.minVariantPrice?.amount ?? null;
-  const priceMax = p.priceRangeV2?.maxVariantPrice?.amount ?? priceMin;
+  // Admin API uses priceRangeV2; Storefront API uses priceRange — same shape.
+  const priceRange = p.priceRangeV2 || p.priceRange || null;
+  const priceMin = priceRange?.minVariantPrice?.amount ?? null;
+  const priceMax = priceRange?.maxVariantPrice?.amount ?? priceMin;
   const currency =
-    p.priceRangeV2?.minVariantPrice?.currencyCode
-    || p.priceRangeV2?.maxVariantPrice?.currencyCode
+    priceRange?.minVariantPrice?.currencyCode
+    || priceRange?.maxVariantPrice?.currencyCode
     || null;
 
   const productType = p.productType || null;

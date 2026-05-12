@@ -61,4 +61,19 @@ describe('extractProductRow', () => {
     expect(row.textForEmbedding).toContain('DSNU-20-50-P-A');
     expect(row.textForEmbedding).toContain('Bore 20mm');
   });
+
+  it('handles Storefront API priceRange shape (no V2 suffix)', () => {
+    // Storefront API returns priceRange instead of priceRangeV2; same inner
+    // shape. The extractor should accept either.
+    const storefrontShaped = JSON.parse(JSON.stringify(fixture));
+    delete storefrontShaped.priceRangeV2;
+    storefrontShaped.priceRange = {
+      minVariantPrice: { amount: '99.50', currencyCode: 'AED' },
+      maxVariantPrice: { amount: '129.99', currencyCode: 'AED' },
+    };
+    const row = extractProductRow(storefrontShaped);
+    expect(row.priceMin).toBe('99.50');
+    expect(row.priceMax).toBe('129.99');
+    expect(row.currency).toBe('AED');
+  });
 });

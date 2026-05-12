@@ -2,22 +2,26 @@
 //
 // Run this ONCE from your local laptop to populate the products index.
 // Usage:
-//   $env:SHOPIFY_SHOP_DOMAIN="creativeautomation.myshopify.com"
-//   $env:SHOPIFY_ADMIN_TOKEN="shpat_..."
+//   $env:SHOPIFY_SHOP_DOMAIN="<shop>.myshopify.com"
+//   $env:SHOPIFY_STOREFRONT_TOKEN="shpss_..."
 //   $env:DATABASE_URL="<railway public postgres url>"
 //   $env:VOYAGE_API_KEY="pa-..."
 //   node scripts/bootstrap-index.js
 //
 // Safe to re-run: upserts are idempotent and out-of-order-safe.
+//
+// NOTE: Uses the Storefront API (shpss_) rather than Admin (shpat_). Only
+// PUBLISHED products are returned; drafts and archived products are not
+// indexed (intentional — those aren't shown to chat users anyway).
 
 import 'dotenv/config';
-import { makeAdminClient } from '../app/services/admin-shopify.server.js';
+import { makeStorefrontClient } from '../app/services/storefront-paginate.server.js';
 import { upsertProductFromShopify } from '../app/services/product-index.server.js';
 import { embedMany } from '../app/services/embeddings.server.js';
 import { extractProductRow } from '../app/services/product-extractor.server.js';
 import prisma from '../app/db.server.js';
 
-const REQUIRED_ENV = ['SHOPIFY_SHOP_DOMAIN', 'SHOPIFY_ADMIN_TOKEN', 'DATABASE_URL', 'VOYAGE_API_KEY'];
+const REQUIRED_ENV = ['SHOPIFY_SHOP_DOMAIN', 'SHOPIFY_STOREFRONT_TOKEN', 'DATABASE_URL', 'VOYAGE_API_KEY'];
 for (const k of REQUIRED_ENV) {
   if (!process.env[k]) {
     console.error(`Missing required env: ${k}`);
@@ -26,9 +30,9 @@ for (const k of REQUIRED_ENV) {
 }
 
 async function main() {
-  const client = makeAdminClient({
+  const client = makeStorefrontClient({
     shopDomain: process.env.SHOPIFY_SHOP_DOMAIN,
-    accessToken: process.env.SHOPIFY_ADMIN_TOKEN,
+    storefrontToken: process.env.SHOPIFY_STOREFRONT_TOKEN,
   });
 
   let total = 0;
