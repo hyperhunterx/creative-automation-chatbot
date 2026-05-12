@@ -6,11 +6,11 @@
 //
 // Output shape (every field always present):
 //   {
-//     category: string | null,
-//     brand_include: string[],
-//     brand_exclude: string[],
+//     category: string | null,        // lowercase, granular tag-style, e.g. "pneumatic guided cylinders"
+//     brand_include: string[],         // lowercase brand names
+//     brand_exclude: string[],         // lowercase brand names
 //     specs: object,
-//     free_text: string
+//     free_text: string                // 2-6 word search phrase, natural casing
 //   }
 
 import { chatJson } from './llm.server.js';
@@ -20,20 +20,21 @@ const SYSTEM_PROMPT = `You are a query-understanding component for an industrial
 
 Given the user's most recent message AND the prior conversation, output STRICTLY a single JSON object describing what the user is asking the catalog to find. Do not output any prose, markdown, or commentary — only valid JSON.
 
-JSON schema (every key required, use empty arrays / empty object / null for not-present):
+JSON schema (every key required; use empty arrays / empty object / null for not-present):
 {
-  "category": string | null,        // canonical product category, e.g. "Pneumatic Cylinder", "Circuit Breaker", "Relay"
-  "brand_include": string[],         // brands the user wants to see; empty = any brand
-  "brand_exclude": string[],         // brands the user does NOT want; e.g. "another brand than X" → ["X"]
-  "specs": object,                   // attribute filters as flat key-value, e.g. {"bore_mm": 20}; empty if none
-  "free_text": string                // a cleaned 2-6 word search phrase capturing what to search
+  "category": string | null,        // LOWERCASE granular product category matching how the catalog tags products, e.g. "pneumatic guided cylinders", "motion control sensors", "inverter drives", "damper actuators", "sensor & actuator cables". Prefer the most specific category that fits the user's intent. Use null if the user hasn't asked about a specific product family.
+  "brand_include": string[],         // LOWERCASE brand names the user wants to see; empty = any brand. Example: ["smc", "festo"]
+  "brand_exclude": string[],         // LOWERCASE brand names the user does NOT want. Example: user says "from another brand" after seeing Festo → ["festo"]
+  "specs": object,                   // attribute filters, flat key/value, e.g. {"bore_mm": 20}; empty if none
+  "free_text": string                // 2-6 word search phrase capturing what to search. Keep dimension/spec words like "M20", "24VDC", and SKUs intact in natural casing.
 }
 
 Rules:
-- Use the prior conversation. If the user previously asked about "M20 cylinder from Festo" and now says "from another brand", category stays "Pneumatic Cylinder" and brand_exclude=["Festo"].
-- If you receive a "Last shown:" hint about category/brands, USE IT to anchor the current turn.
+- ALL brand names and the category MUST be lowercase. The catalog filters on a lowercased index — mixed-case values will silently miss.
+- Use the prior conversation. If the user previously asked about "M20 pneumatic guided cylinder from Smc" and now says "from another brand", category stays "pneumatic guided cylinders" and brand_exclude=["smc"].
+- If you receive a "Last shown:" hint about category/brands, USE IT to anchor the current turn. The hint is already lowercase — copy it through unchanged.
 - Never invent specs. If the user did not state a value, leave specs empty.
-- free_text should keep dimension/spec words like "M20", "24VDC", or SKUs intact.
+- free_text keeps its natural casing (this drives BM25 ranking on titles/SKUs).
 - If the user is just chatting (greeting, thanks, etc.) return all empty fields with free_text equal to the raw message.
 
 OUTPUT JSON ONLY.`;
@@ -59,12 +60,25 @@ function fallbackIntent(rawMessage) {
   };
 }
 
+function toLowerStringArray(arr) {
+  if (!Array.isArray(arr)) return [];
+  const out = new Set();
+  for (const v of arr) {
+    if (typeof v !== 'string') continue;
+    const lower = v.trim().toLowerCase();
+    if (lower) out.add(lower);
+  }
+  return [...out];
+}
+
 function normalize(parsed, rawMessage) {
   if (!parsed || typeof parsed !== 'object') return fallbackIntent(rawMessage);
+  const categoryRaw = typeof parsed.category === 'string' ? parsed.category.trim() : '';
+  const category = categoryRaw ? categoryRaw.toLowerCase() : null;
   return {
-    category: typeof parsed.category === 'string' && parsed.category.trim() ? parsed.category.trim() : null,
-    brand_include: Array.isArray(parsed.brand_include) ? parsed.brand_include.filter(b => typeof b === 'string') : [],
-    brand_exclude: Array.isArray(parsed.brand_exclude) ? parsed.brand_exclude.filter(b => typeof b === 'string') : [],
+    category,
+    brand_include: toLowerStringArray(parsed.brand_include),
+    brand_exclude: toLowerStringArray(parsed.brand_exclude),
     specs: parsed.specs && typeof parsed.specs === 'object' ? parsed.specs : {},
     free_text: typeof parsed.free_text === 'string' && parsed.free_text.trim() ? parsed.free_text.trim() : (rawMessage || ''),
   };

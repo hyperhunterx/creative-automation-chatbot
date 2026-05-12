@@ -20,6 +20,8 @@ integrationDescribe('product-index.server', () => {
     expect(row).not.toBeNull();
     expect(row.title).toBe(fixture.title);
     expect(row.vendor).toBe('Festo');
+    expect(row.vendorNormalized).toBe('festo');
+    expect(row.categories).toEqual(['pneumatic', 'cylinder', 'iso-6432']);
   });
 
   integrationIt('upsert is idempotent for the same payload', async () => {

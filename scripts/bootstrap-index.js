@@ -12,7 +12,7 @@
 
 import 'dotenv/config';
 import { makeAdminClient } from '../app/services/admin-shopify.server.js';
-import { upsertProductFromShopify } from '../app/services/product-index.server.js';
+import { upsertManyFromShopify } from '../app/services/product-index.server.js';
 import { embedMany } from '../app/services/embeddings.server.js';
 import { extractProductRow } from '../app/services/product-extractor.server.js';
 import prisma from '../app/db.server.js';
@@ -43,13 +43,9 @@ async function main() {
     // inputType: 'document' — these are catalog entries, not user queries.
     const vectors = await embedMany(texts, { inputType: 'document' });
 
-    // Inject each precomputed embedding into upsert via a wrapper so the
-    // single-product upserter doesn't re-embed.
-    for (let i = 0; i < products.length; i++) {
-      const vec = vectors[i];
-      await upsertProductFromShopify(products[i], { embedOne: async () => vec });
-      total += 1;
-    }
+    // One multi-row INSERT per page — eliminates per-product DB round trips.
+    const { count } = await upsertManyFromShopify(products, vectors);
+    total += count;
 
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.log(`[bootstrap] page ${pageNum} done | total=${total} | elapsed=${elapsed}s`);

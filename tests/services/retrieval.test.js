@@ -20,51 +20,63 @@ integrationDescribe('retrieval.server', () => {
   integrationIt('returns only products in the requested category', async () => {
     const { hybridSearch } = await import('../../app/services/retrieval.server.js');
     const results = await hybridSearch({
-      category: 'Pneumatic Cylinder',
+      category: 'pneumatic cylinders',
       brand_include: [],
       brand_exclude: [],
       free_text: 'cylinder',
       query_vector: cylinderVec(),
     });
     expect(results.length).toBeGreaterThan(0);
-    expect(results.every(r => r.category === 'Pneumatic Cylinder')).toBe(true);
+    expect(results.every(r => Array.isArray(r.categories) && r.categories.includes('pneumatic cylinders'))).toBe(true);
   });
 
-  integrationIt('respects brand_exclude — pressure gauges from excluded brand are not returned', async () => {
+  integrationIt('respects brand_exclude — excluded brand is not returned', async () => {
     const { hybridSearch } = await import('../../app/services/retrieval.server.js');
     const results = await hybridSearch({
-      category: 'Pneumatic Cylinder',
+      category: 'pneumatic cylinders',
       brand_include: [],
-      brand_exclude: ['Festo'],
+      brand_exclude: ['festo'],
       free_text: 'M20',
       query_vector: cylinderVec(),
     });
-    expect(results.every(r => r.vendor !== 'Festo')).toBe(true);
+    expect(results.every(r => r.vendorNormalized !== 'festo')).toBe(true);
   });
 
   integrationIt('respects brand_include — only listed brands returned', async () => {
     const { hybridSearch } = await import('../../app/services/retrieval.server.js');
     const results = await hybridSearch({
-      category: 'Pneumatic Cylinder',
+      category: 'pneumatic cylinders',
+      brand_include: ['smc'],
+      brand_exclude: [],
+      free_text: 'cylinder',
+      query_vector: cylinderVec(),
+    });
+    expect(results.every(r => r.vendorNormalized === 'smc')).toBe(true);
+  });
+
+  integrationIt('normalizes mixed-case inputs defensively (smoke test)', async () => {
+    const { hybridSearch } = await import('../../app/services/retrieval.server.js');
+    const results = await hybridSearch({
+      category: 'Pneumatic Cylinders',
       brand_include: ['SMC'],
       brand_exclude: [],
       free_text: 'cylinder',
       query_vector: cylinderVec(),
     });
-    expect(results.every(r => r.vendor === 'SMC')).toBe(true);
+    expect(results.every(r => r.vendorNormalized === 'smc')).toBe(true);
   });
 
   integrationIt('excludes soft-deleted products', async () => {
     const { hybridSearch } = await import('../../app/services/retrieval.server.js');
     const dbi = getTestPrisma();
-    await dbi.$executeRawUnsafe(`UPDATE products SET "deletedAt" = now() WHERE vendor = 'SMC'`);
+    await dbi.$executeRawUnsafe(`UPDATE products SET "deletedAt" = now() WHERE "vendorNormalized" = 'smc'`);
     const results = await hybridSearch({
-      category: 'Pneumatic Cylinder',
+      category: 'pneumatic cylinders',
       brand_include: [],
       brand_exclude: [],
       free_text: 'cylinder',
       query_vector: cylinderVec(),
     });
-    expect(results.every(r => r.vendor !== 'SMC')).toBe(true);
+    expect(results.every(r => r.vendorNormalized !== 'smc')).toBe(true);
   });
 });

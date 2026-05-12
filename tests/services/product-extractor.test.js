@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import fixture from '../fixtures/shopify-product.json' with { type: 'json' };
-import { extractProductRow, stripHtml } from '../../app/services/product-extractor.server.js';
+import {
+  extractProductRow,
+  stripHtml,
+  normalizeVendor,
+  deriveCategories,
+  isJunkProductType,
+} from '../../app/services/product-extractor.server.js';
 
 describe('stripHtml', () => {
   it('removes tags', () => {
@@ -15,6 +21,70 @@ describe('stripHtml', () => {
   });
 });
 
+describe('normalizeVendor', () => {
+  it('lowercases and trims', () => {
+    expect(normalizeVendor('  Smc  ')).toBe('smc');
+    expect(normalizeVendor('ABB')).toBe('abb');
+    expect(normalizeVendor('SICK')).toBe('sick');
+    expect(normalizeVendor('Phoenix-contact')).toBe('phoenix-contact');
+  });
+  it('returns null for empty / non-string', () => {
+    expect(normalizeVendor(null)).toBeNull();
+    expect(normalizeVendor('')).toBeNull();
+    expect(normalizeVendor('   ')).toBeNull();
+    expect(normalizeVendor(42)).toBeNull();
+  });
+});
+
+describe('isJunkProductType', () => {
+  it('flags breadcrumb-style values', () => {
+    expect(isJunkProductType('Home')).toBe(true);
+    expect(isJunkProductType('Back to results')).toBe(true);
+    expect(isJunkProductType('Home / Electronic Components / Antennas')).toBe(true);
+  });
+  it('accepts real productTypes', () => {
+    expect(isJunkProductType('Pneumatic Cylinder')).toBe(false);
+    expect(isJunkProductType('Electrical, Automation & Cables')).toBe(false);
+  });
+  it('flags empty/null', () => {
+    expect(isJunkProductType(null)).toBe(true);
+    expect(isJunkProductType('')).toBe(true);
+    expect(isJunkProductType('   ')).toBe(true);
+  });
+});
+
+describe('deriveCategories', () => {
+  it('lowercases all tags', () => {
+    const cats = deriveCategories(['Pneumatic Cylinders', 'ISO-6432'], null);
+    expect(cats).toEqual(['pneumatic cylinders', 'iso-6432']);
+  });
+  it('strips brand-prefixed redundant tags', () => {
+    const cats = deriveCategories(
+      ['Smc Pneumatic Guided Cylinders', 'Pneumatic Guided Cylinders', 'Pneumatics & Hydraulics'],
+      'Smc'
+    );
+    expect(cats).toEqual(['pneumatic guided cylinders', 'pneumatics & hydraulics']);
+  });
+  it('strips a bare brand-name tag', () => {
+    const cats = deriveCategories(['pneumatic', 'cylinder', 'festo'], 'Festo');
+    expect(cats).toEqual(['pneumatic', 'cylinder']);
+  });
+  it('dedupes', () => {
+    const cats = deriveCategories(['Sensors', 'sensors', 'SENSORS'], 'SICK');
+    expect(cats).toEqual(['sensors']);
+  });
+  it('returns empty array for non-array input', () => {
+    expect(deriveCategories(null, 'Smc')).toEqual([]);
+    expect(deriveCategories(undefined, 'Smc')).toEqual([]);
+  });
+  it('matches case-insensitively against the vendor', () => {
+    // Real catalog: vendor "Smc" but brand-prefixed tag "Smc Pneumatic ..." —
+    // also test the reverse with "ABB" / "Abb Inverter Drives"
+    const cats = deriveCategories(['Abb Inverter Drives', 'Inverter Drives'], 'ABB');
+    expect(cats).toEqual(['inverter drives']);
+  });
+});
+
 describe('extractProductRow', () => {
   it('extracts core fields from a Shopify GraphQL product', () => {
     const row = extractProductRow(fixture);
@@ -22,7 +92,6 @@ describe('extractProductRow', () => {
     expect(row.handle).toBe('festo-dsnu-20-50-p-a');
     expect(row.vendor).toBe('Festo');
     expect(row.productType).toBe('Pneumatic Cylinder');
-    expect(row.category).toBe('Pneumatic Cylinder'); // v1 = productType
     expect(row.tags).toEqual(['pneumatic', 'cylinder', 'ISO-6432', 'festo']);
     expect(row.priceMin).toBe('210.00');
     expect(row.priceMax).toBe('210.00');
@@ -31,10 +100,25 @@ describe('extractProductRow', () => {
     expect(row.shopifyUpdatedAt).toBe('2026-04-30T12:00:00.000Z');
   });
 
+  it('populates vendorNormalized (lowercased)', () => {
+    const row = extractProductRow(fixture);
+    expect(row.vendorNormalized).toBe('festo');
+  });
+
+  it('populates categories from tags, stripping brand-name tag', () => {
+    const row = extractProductRow(fixture);
+    expect(row.categories).toEqual(['pneumatic', 'cylinder', 'iso-6432']);
+  });
+
+  it('legacy `category` falls back to first derived category', () => {
+    const row = extractProductRow(fixture);
+    expect(row.category).toBe('pneumatic');
+  });
+
   it('strips HTML from description', () => {
     const row = extractProductRow(fixture);
     expect(row.description).not.toContain('<p>');
-    expect(row.description).toContain('Bore 20mm'); // fixture uses capital B; keep natural casing
+    expect(row.description).toContain('Bore 20mm');
   });
 
   it('flattens variants with SKU + price + availability', () => {
@@ -63,8 +147,6 @@ describe('extractProductRow', () => {
   });
 
   it('handles Storefront API priceRange shape (no V2 suffix)', () => {
-    // Storefront API returns priceRange instead of priceRangeV2; same inner
-    // shape. The extractor should accept either.
     const storefrontShaped = JSON.parse(JSON.stringify(fixture));
     delete storefrontShaped.priceRangeV2;
     storefrontShaped.priceRange = {
@@ -75,5 +157,37 @@ describe('extractProductRow', () => {
     expect(row.priceMin).toBe('99.50');
     expect(row.priceMax).toBe('129.99');
     expect(row.currency).toBe('AED');
+  });
+
+  it('handles real-catalog-shape product (Smc cylinder with brand-prefixed tags)', () => {
+    const real = {
+      id: 'gid://shopify/Product/9000000001',
+      handle: 'smc-mxz20-20',
+      title: 'MXZ20-20 - Smc Double Pneumatic Guided Cylinder, 20 mm Bore x 20 mm Stroke',
+      vendor: 'Smc',
+      productType: 'Mechanical Fluid Power & Tools',
+      tags: [
+        'Pneumatic Cylinders & Actuators',
+        'Pneumatic Guided Cylinders',
+        'Pneumatics & Hydraulics',
+        'Smc Pneumatic Guided Cylinders',
+      ],
+      descriptionHtml: '<p>MXZ series guided cylinder.</p>',
+      priceRangeV2: {
+        minVariantPrice: { amount: '350.00', currencyCode: 'AED' },
+        maxVariantPrice: { amount: '350.00', currencyCode: 'AED' },
+      },
+      variants: { nodes: [{ id: 'gid://x/1', sku: 'MXZ20-20', price: '350.00', availableForSale: true }] },
+      updatedAt: '2026-05-01T00:00:00Z',
+    };
+    const row = extractProductRow(real);
+    expect(row.vendor).toBe('Smc');
+    expect(row.vendorNormalized).toBe('smc');
+    expect(row.categories).toEqual([
+      'pneumatic cylinders & actuators',
+      'pneumatic guided cylinders',
+      'pneumatics & hydraulics',
+    ]);
+    expect(row.categories).not.toContain('smc pneumatic guided cylinders');
   });
 });

@@ -18,9 +18,11 @@ model Product {
   id            String   @id                  // Shopify GID, e.g. "gid://shopify/Product/123"
   handle        String
   title         String
-  vendor        String?                       // brand
-  productType   String?                       // raw Shopify product_type
-  category      String?                       // normalized category (v1 = productType)
+  vendor        String?                       // brand, original casing (display)
+  vendorNormalized String?                    // brand, lowercased+trimmed (SQL filter)
+  productType   String?                       // raw Shopify product_type (display only)
+  category      String?                       // legacy — first derived category
+  categories    String[] @default([])         // lowercase tags, brand-prefix stripped — v6 category filter
   tags          String[]
   description   String?                       // HTML stripped
   priceMin      Decimal? @db.Decimal(12, 2)
@@ -39,6 +41,7 @@ model Product {
 
   @@index([handle])
   @@index([vendor])
+  @@index([vendorNormalized])
   @@index([category])
   @@index([deletedAt])
   @@map("products")

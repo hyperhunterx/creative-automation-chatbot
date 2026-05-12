@@ -13,9 +13,9 @@ describe('extractIntent', () => {
 
   it('extracts category + brand_exclude when user says "another brand"', async () => {
     llm.chatJson.mockResolvedValue({
-      category: 'Pneumatic Cylinder',
+      category: 'pneumatic guided cylinders',
       brand_include: [],
-      brand_exclude: ['Festo'],
+      brand_exclude: ['festo'],
       specs: {},
       free_text: 'M20 cylinder',
     });
@@ -27,18 +27,18 @@ describe('extractIntent', () => {
         { role: 'assistant', content: 'Here are some Festo M20 cylinders.' },
         { role: 'user', content: 'show me from another brand' },
       ],
-      lastShownCategory: 'Pneumatic Cylinder',
-      lastShownBrands: ['Festo'],
+      lastShownCategory: 'pneumatic guided cylinders',
+      lastShownBrands: ['festo'],
     });
 
-    expect(intent.category).toBe('Pneumatic Cylinder');
-    expect(intent.brand_exclude).toEqual(['Festo']);
+    expect(intent.category).toBe('pneumatic guided cylinders');
+    expect(intent.brand_exclude).toEqual(['festo']);
   });
 
   it('extracts category + brand_include when user specifies brand', async () => {
     llm.chatJson.mockResolvedValue({
-      category: 'Circuit Breaker',
-      brand_include: ['ABB'],
+      category: 'circuit breakers',
+      brand_include: ['abb'],
       brand_exclude: [],
       specs: {},
       free_text: 'circuit breaker',
@@ -49,7 +49,25 @@ describe('extractIntent', () => {
       messages: [{ role: 'user', content: 'ABB circuit breaker' }],
     });
 
-    expect(intent.brand_include).toEqual(['ABB']);
+    expect(intent.brand_include).toEqual(['abb']);
+  });
+
+  it('lowercases values even when the LLM accidentally returns mixed case', async () => {
+    llm.chatJson.mockResolvedValue({
+      category: 'Pneumatic Guided Cylinders',
+      brand_include: ['Festo', '  SMC  '],
+      brand_exclude: ['ABB'],
+      specs: {},
+      free_text: 'cylinder',
+    });
+
+    const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=2b');
+    const intent = await extractIntent({
+      messages: [{ role: 'user', content: 'cylinder' }],
+    });
+    expect(intent.category).toBe('pneumatic guided cylinders');
+    expect(intent.brand_include).toEqual(['festo', 'smc']);
+    expect(intent.brand_exclude).toEqual(['abb']);
   });
 
   it('returns null filters and raw free_text on parse failure', async () => {
@@ -79,7 +97,7 @@ describe('extractIntent', () => {
 
   it('filters out non-string entries from brand_include/exclude arrays', async () => {
     llm.chatJson.mockResolvedValue({
-      category: 'Relay',
+      category: 'relays',
       brand_include: ['Siemens', 42, null],
       brand_exclude: [{ bad: 'obj' }, 'Omron'],
       specs: {},
@@ -87,7 +105,7 @@ describe('extractIntent', () => {
     });
     const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=5');
     const intent = await extractIntent({ messages: [{ role: 'user', content: 'relay' }] });
-    expect(intent.brand_include).toEqual(['Siemens']);
-    expect(intent.brand_exclude).toEqual(['Omron']);
+    expect(intent.brand_include).toEqual(['siemens']);
+    expect(intent.brand_exclude).toEqual(['omron']);
   });
 });

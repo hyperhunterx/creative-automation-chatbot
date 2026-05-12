@@ -34,3 +34,6 @@ shopify.*.toml
 .env.test
 coverage/
 .vitest/
+
+# Claude Code local cache
+.claude/
