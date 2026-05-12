@@ -90,7 +90,11 @@ model Conversation {
   // Analytics
   messageCount    Int       @default(0)
   toolCallCount   Int       @default(0)
-  
+
+  // Last retrieval state — used to seed query understanding on follow-up turns (v6 pipeline)
+  lastShownCategory String?
+  lastShownBrands   String[]  @default([])
+
   // Timestamps
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
