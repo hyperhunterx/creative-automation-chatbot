@@ -11,6 +11,14 @@ include_config_on_deploy = true
 [webhooks]
 api_version = "2026-01"
 
+  [[webhooks.subscriptions]]
+  topics = [ "products/create", "products/update", "products/delete" ]
+  uri = "/api/webhooks"
+
+  [[webhooks.subscriptions]]
+  topics = [ "inventory_levels/update" ]
+  uri = "/api/webhooks"
+
 [access_scopes]
 scopes = "read_products,customer_read_customers,customer_read_orders,customer_read_store_credit_account_transactions,customer_read_store_credit_accounts,unauthenticated_read_product_listings,unauthenticated_read_product_inventory,unauthenticated_read_product_pickup_locations,unauthenticated_write_checkouts,unauthenticated_read_checkouts,unauthenticated_write_customers,unauthenticated_read_customers,unauthenticated_read_customer_tags,unauthenticated_read_content,unauthenticated_read_selling_plans,unauthenticated_read_product_tags"
 
