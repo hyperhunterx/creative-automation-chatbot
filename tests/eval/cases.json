@@ -1,0 +1,51 @@
+[
+  {
+    "name": "M20 cylinder from Festo — initial query",
+    "messages": [{ "role": "user", "content": "M20 cylinder from Festo" }],
+    "expect": {
+      "category": "Pneumatic Cylinder",
+      "minResults": 1,
+      "vendorIncludes": "Festo"
+    }
+  },
+  {
+    "name": "show me from another brand — must keep cylinder, drop Festo",
+    "messages": [
+      { "role": "user", "content": "M20 cylinder from Festo" },
+      { "role": "assistant", "content": "Here are some Festo M20 cylinders." },
+      { "role": "user", "content": "show me from another brand" }
+    ],
+    "lastShownCategory": "Pneumatic Cylinder",
+    "lastShownBrands": ["Festo"],
+    "expect": {
+      "category": "Pneumatic Cylinder",
+      "minResults": 1,
+      "vendorExcludes": ["Festo"],
+      "categoryHomogeneous": true
+    }
+  },
+  {
+    "name": "ABB circuit breaker",
+    "messages": [{ "role": "user", "content": "ABB circuit breaker" }],
+    "expect": {
+      "category": "Circuit Breaker",
+      "minResults": 1,
+      "vendorIncludes": "ABB"
+    }
+  },
+  {
+    "name": "exact SKU lookup",
+    "messages": [{ "role": "user", "content": "DSNU-20-50-P-A" }],
+    "expect": {
+      "minResults": 1,
+      "topMatchSkuContains": "DSNU-20-50-P-A"
+    }
+  },
+  {
+    "name": "vague greeting — no products needed",
+    "messages": [{ "role": "user", "content": "hello" }],
+    "expect": {
+      "maxResults": 0
+    }
+  }
+]
