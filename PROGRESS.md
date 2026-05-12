@@ -38,12 +38,15 @@ Phase 9  Ship to production                   [░░░░░░░░░░]  
 - [x] Scope v1: search only (Q&A and cart polish deferred to v1.1+)
 - [x] Clone repo into Chatbot dir, create `rohit` branch
 - [x] Write PLAN.md + PROGRESS.md
-- [ ] **User reviews PLAN.md** ← we are here
-- [ ] Invoke `superpowers:writing-plans` skill for granular implementation plan
+- [x] User reviews PLAN.md and approves
+- [x] Push repo to new GitHub home `hyperhunterx/creative-automation-chatbot` (squashed history, no secrets)
+- [x] Invoke `superpowers:writing-plans` skill for granular implementation plan
 
 ### Phase 1 — Implementation plan
-- [ ] Use `superpowers:writing-plans` skill, input = PLAN.md
-- [ ] Output saved alongside or replacing this checklist
+- [x] Use `superpowers:writing-plans` skill, input = PLAN.md
+- [x] Output saved to [docs/superpowers/plans/2026-05-12-retrieval-rewrite.md](docs/superpowers/plans/2026-05-12-retrieval-rewrite.md) — 21 tasks, ~110 steps, covers Phases 2–9
+- [ ] **User reviews implementation plan** ← we are here
+- [ ] Choose execution mode (subagent-driven vs inline) and begin Task 1
 
 ### Phase 2 — Schema + bootstrap (no user-visible change yet)
 - [ ] Add Prisma migration with `products` table + `pgvector` + `pg_trgm` extensions
