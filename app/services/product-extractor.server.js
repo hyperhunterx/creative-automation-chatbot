@@ -43,7 +43,9 @@ function variantsToRows(variantsField) {
 export function extractProductRow(shopifyProduct) {
   const p = shopifyProduct;
   const variants = variantsToRows(p.variants);
-  const description = stripHtml(p.descriptionHtml || p.description || '').toLowerCase();
+  // Keep natural casing — description is shown to users in the chat widget.
+  // If we ever need a case-normalized variant for embedding, build it separately.
+  const description = stripHtml(p.descriptionHtml || p.description || '');
 
   const priceMin = p.priceRangeV2?.minVariantPrice?.amount ?? null;
   const priceMax = p.priceRangeV2?.maxVariantPrice?.amount ?? priceMin;

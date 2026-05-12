@@ -34,7 +34,7 @@ describe('extractProductRow', () => {
   it('strips HTML from description', () => {
     const row = extractProductRow(fixture);
     expect(row.description).not.toContain('<p>');
-    expect(row.description).toContain('bore 20mm');
+    expect(row.description).toContain('Bore 20mm'); // fixture uses capital B; keep natural casing
   });
 
   it('flattens variants with SKU + price + availability', () => {
@@ -59,6 +59,6 @@ describe('extractProductRow', () => {
     expect(row.textForEmbedding).toContain('Festo');
     expect(row.textForEmbedding).toContain('Pneumatic Cylinder');
     expect(row.textForEmbedding).toContain('DSNU-20-50-P-A');
-    expect(row.textForEmbedding).toContain('bore 20mm');
+    expect(row.textForEmbedding).toContain('Bore 20mm');
   });
 });
