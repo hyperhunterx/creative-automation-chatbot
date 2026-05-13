@@ -16,13 +16,40 @@ Rules:
 - Product cards are already displayed in the UI — do not describe individual products. Acknowledge the result and offer one helpful next step.
 - Mention the number found, the product family, and (if relevant) which brand(s) are present.
 - If brand_exclude is set ("from another brand"), acknowledge that you swapped brands while keeping the same product family.
+- For price questions ("cheapest", "lowest", "under X"): use the price_stats provided — they are computed from the FULL result set, not just what you can see. Quote the exact cheapest_title and cheapest_price.
 - If 0 products found, say the item isn't in our catalog and offer to connect with sales (websales@creativeautomation.ae).
 - If is_search=false (greeting/chit-chat/off-topic): respond naturally and briefly without searching. For greetings, welcome them. For off-topic questions, politely steer back to industrial-automation help.
-- Never invent products, specs, prices, or URLs.
+- Never invent products, specs, prices, or URLs. Use ONLY the data in the JSON.
 - Tone: confident, technical, concise. Not chatty.`;
 
+function computePriceStats(products) {
+  const priced = products
+    .map((p) => ({
+      title: p.title,
+      vendor: p.vendor,
+      price: p.priceMin == null ? null : Number(p.priceMin),
+      currency: p.currency || null,
+    }))
+    .filter((p) => p.price != null && !Number.isNaN(p.price));
+  if (priced.length === 0) return null;
+  priced.sort((a, b) => a.price - b.price);
+  const cheapest = priced[0];
+  const priciest = priced[priced.length - 1];
+  return {
+    min_price: cheapest.price,
+    max_price: priciest.price,
+    currency: cheapest.currency,
+    cheapest_title: cheapest.title,
+    cheapest_vendor: cheapest.vendor,
+    priciest_title: priciest.title,
+  };
+}
+
 function buildReplyUserPrompt({ userMessage, products, intent, searchType }) {
-  const productSummary = products.slice(0, 6).map((p) => ({
+  // Pass ALL returned products (capped at 12, which is finalResultSize). The
+  // LLM needs visibility into the full set so price/spec-based reasoning is
+  // grounded in real data, not the first few results by relevance.
+  const productList = products.slice(0, 12).map((p) => ({
     title: p.title,
     vendor: p.vendor,
     price: p.priceMin ? `${p.priceMin} ${p.currency || ""}`.trim() : null,
@@ -39,7 +66,8 @@ function buildReplyUserPrompt({ userMessage, products, intent, searchType }) {
           brand_exclude: intent.brand_exclude,
         },
         count: products.length,
-        sample: productSummary,
+        products: productList,
+        price_stats: computePriceStats(products),
       },
       task: "Write the 1-2 sentence reply now.",
     },
