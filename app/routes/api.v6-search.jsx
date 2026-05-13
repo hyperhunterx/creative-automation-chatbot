@@ -17,9 +17,10 @@ Rules:
 - Mention the number found, the product family, and (if relevant) which brand(s) are present.
 - If brand_exclude is set ("from another brand"), acknowledge that you swapped brands while keeping the same product family.
 - For price questions ("cheapest", "lowest", "under X"): use the price_stats provided — they are computed from the FULL result set, not just what you can see. Quote the exact cheapest_title and cheapest_price.
-- If 0 products found, say the item isn't in our catalog and offer to connect with sales (websales@creativeautomation.ae).
+- If 0 products found AND this is a new search topic, say the item isn't in our catalog and offer sales (websales@creativeautomation.ae).
+- If 0 products found in this turn BUT the recent_conversation shows that products were already presented earlier and the user is asking a follow-up question (specs, price, comparison) about those products: reference the prior products, do NOT claim we don't stock them.
 - If is_search=false (greeting/chit-chat/off-topic): respond naturally and briefly without searching. For greetings, welcome them. For off-topic questions, politely steer back to industrial-automation help.
-- Never invent products, specs, prices, or URLs. Use ONLY the data in the JSON.
+- Never invent products, specs, prices, or URLs. Use ONLY the data in the JSON or what was clearly stated in recent_conversation.
 - Tone: confident, technical, concise. Not chatty.`;
 
 function computePriceStats(products) {
@@ -45,7 +46,7 @@ function computePriceStats(products) {
   };
 }
 
-function buildReplyUserPrompt({ userMessage, products, intent, searchType }) {
+function buildReplyUserPrompt({ userMessage, messages, products, intent, searchType }) {
   // Pass ALL returned products (capped at 12, which is finalResultSize). The
   // LLM needs visibility into the full set so price/spec-based reasoning is
   // grounded in real data, not the first few results by relevance.
@@ -54,9 +55,20 @@ function buildReplyUserPrompt({ userMessage, products, intent, searchType }) {
     vendor: p.vendor,
     price: p.priceMin ? `${p.priceMin} ${p.currency || ""}`.trim() : null,
   }));
+  // Pass recent conversation (excluding the current user turn — that's in
+  // user_message). Truncate to last 4 turns to keep token cost down. Assistant
+  // messages let the LLM ground follow-up questions in what we already showed.
+  const recent = (messages || [])
+    .slice(0, -1)
+    .slice(-4)
+    .map((m) => ({
+      role: m.role,
+      content: typeof m.content === "string" ? m.content.slice(0, 600) : "",
+    }));
   return JSON.stringify(
     {
       user_message: userMessage,
+      recent_conversation: recent,
       search_result: {
         searchType,
         intent: {
@@ -76,11 +88,11 @@ function buildReplyUserPrompt({ userMessage, products, intent, searchType }) {
   );
 }
 
-async function generateReply({ userMessage, products, intent, searchType }) {
+async function generateReply({ userMessage, messages, products, intent, searchType }) {
   const text = await chatText({
     model: RETRIEVAL_CONFIG.queryUnderstandingModel,
     system: REPLY_SYSTEM_PROMPT,
-    user: buildReplyUserPrompt({ userMessage, products, intent, searchType }),
+    user: buildReplyUserPrompt({ userMessage, messages, products, intent, searchType }),
     maxTokens: 180,
     temperature: 0.4,
     timeoutMs: 6000,
@@ -142,6 +154,7 @@ export const action = async ({ request }) => {
   const userMessage = messages[messages.length - 1]?.content || "";
   const reply = await generateReply({
     userMessage,
+    messages,
     products: result.products,
     intent: result.intent,
     searchType: result.searchType,

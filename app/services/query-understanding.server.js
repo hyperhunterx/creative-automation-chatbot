@@ -32,7 +32,9 @@ JSON schema (every key required; use empty arrays / empty object / null for not-
 }
 
 Rules for is_search:
-- TRUE when the user is asking to find / buy / browse / compare any catalog item — even vague queries like "show me cables" or "do you have anything for safety".
+- TRUE when the user is asking to find / buy / browse / compare ANY catalog item — even vague queries like "show me cables" or "do you have anything for safety".
+- TRUE for follow-up questions about a specific product mentioned in prior turns: "show me specs", "tell me more about it", "what's the price", "is it in stock", "what are the dimensions". These reference a real product and should trigger a search to retrieve fresh data.
+- TRUE for filter-style follow-ups: "show me the cheapest one", "the most expensive", "under 1000 AED", "only the ones in stock" — these still operate on the catalog.
 - FALSE for: greetings ("hi", "hello"), acknowledgements ("ok", "thanks", "got it"), pure small talk, off-topic questions ("what time is it", "how are you", "what's the weather"), meta-questions about the chatbot itself ("who are you", "how does this work"), or anything that doesn't reference a product, category, brand, SKU, spec, or shopping action.
 - When unsure, prefer TRUE — a false negative (missed search) is worse than a false positive (an empty search returns gracefully).
 
