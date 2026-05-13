@@ -90,3 +90,37 @@ export async function chatJson({
   const text = response?.choices?.[0]?.message?.content ?? '';
   return safeParseJson(text);
 }
+
+/**
+ * Chat completion that returns plain text. Used for generating conversational
+ * replies (no JSON parsing, no schema). Returns '' on any failure so the
+ * caller can fall back to a synthetic line.
+ */
+export async function chatText({
+  model,
+  system,
+  user,
+  maxTokens = 256,
+  temperature = 0.4,
+  timeoutMs = 6000,
+}) {
+  try {
+    const c = getClient();
+    const response = await Promise.race([
+      c.chat.completions.create({
+        model,
+        max_tokens: maxTokens,
+        temperature,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+      new Promise((_, r) => setTimeout(() => r(new Error('llm timeout')), timeoutMs)),
+    ]);
+    return (response?.choices?.[0]?.message?.content ?? '').trim();
+  } catch (err) {
+    console.warn('[llm] chatText failed:', err.message);
+    return '';
+  }
+}

@@ -226,7 +226,7 @@ export default function TestChat() {
       const intent = data.intent || {};
       const assistantMsg = {
         role: "assistant",
-        content: summarize(intent, products, data.searchType),
+        content: data.reply || summarize(intent, products, data.searchType),
         products,
       };
       setMessages((prev) => [...prev, assistantMsg]);
