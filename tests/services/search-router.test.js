@@ -98,6 +98,19 @@ describe('smartSearch (v6 orchestrator)', () => {
     expect(out.products).toEqual([]);
   });
 
+  it('extractSkuTokens recognizes real SKU shapes and rejects ordinary words', async () => {
+    const { extractSkuTokens } = await import('../../app/services/search-router.server.js?case=sku');
+    expect(extractSkuTokens('R412006218')).toEqual(['R412006218']);
+    expect(extractSkuTokens('R412006218 specs please')).toEqual(['R412006218']);
+    expect(extractSkuTokens('DSNU-20-50-P-A')).toEqual(['DSNU-20-50-P-A']);
+    expect(extractSkuTokens('Show me 1SBL237201R1400 spec sheet')).toEqual(['1SBL237201R1400']);
+    expect(extractSkuTokens('limit switches please')).toEqual([]);
+    expect(extractSkuTokens('100')).toEqual([]); // pure number — not a SKU
+    expect(extractSkuTokens('hi there')).toEqual([]);
+    expect(extractSkuTokens('')).toEqual([]);
+    expect(extractSkuTokens(null)).toEqual([]);
+  });
+
   it('short-circuits when LLM says is_search=false (off-topic)', async () => {
     mods.em.embedOne.mockClear();
     mods.re.hybridSearch.mockClear();

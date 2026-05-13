@@ -139,8 +139,22 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
 
   // Step 4 — rerank
   const t4 = Date.now();
-  const top = await rerank(intent.free_text, candidates, RETRIEVAL_CONFIG.finalResultSize);
+  let top = await rerank(intent.free_text, candidates, RETRIEVAL_CONFIG.finalResultSize);
   const t4Ms = Date.now() - t4;
+
+  // SKU-tight filter: if the user query carries a SKU-shaped token, only
+  // products that literally contain that token (in title or a variant SKU)
+  // are useful. Without this, the rerank dilutes the page with vector-only
+  // matches that share no real signal with the SKU.
+  const skuTokens = extractSkuTokens(intent.free_text);
+  let skuFiltered = false;
+  if (skuTokens.length > 0) {
+    const narrowed = top.filter(p => productMatchesAnySku(p, skuTokens));
+    if (narrowed.length > 0) {
+      top = narrowed;
+      skuFiltered = true;
+    }
+  }
 
   // Defensive check — the brand_exclude SQL filter should make this impossible.
   // If a violation is ever logged it's a real bug (e.g. filter bypassed).
@@ -167,13 +181,18 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
     returned: top.length,
     embed_fallback: embedFallback,
     category_relaxed: categoryRelaxed,
+    sku_filtered: skuFiltered,
     top3_ids: top.slice(0, 3).map(p => p.id),
   });
+
+  let searchType = 'hybrid';
+  if (skuFiltered) searchType = 'hybrid_sku';
+  else if (categoryRelaxed) searchType = 'hybrid_category_relaxed';
 
   return {
     products: top,
     intent,
-    searchType: categoryRelaxed ? 'hybrid_category_relaxed' : 'hybrid',
+    searchType,
     systemHint: `Found ${top.length} matching products. Acknowledge briefly — the cards are already displayed.`,
   };
 }
@@ -188,6 +207,36 @@ const NON_SEARCH_PATTERNS = [
   /^(bye|goodbye|cya)[!. ?]*$/i,
   /^(yes|no|yeah|nope|sure|maybe)[!. ?]*$/i,
 ];
+// Extract tokens that look like a product SKU from arbitrary free-text:
+// alphanumeric, at least 4 chars, contains at least one digit. Hyphens / dots /
+// slashes inside are kept (e.g. "DSNU-20-50-P-A"). Pure words ("filter") and
+// pure-number tokens ("100") are excluded. Returns uppercased dedup'd list.
+export function extractSkuTokens(text) {
+  if (!text || typeof text !== 'string') return [];
+  const out = new Set();
+  const matches = text.match(/\b[A-Za-z0-9][A-Za-z0-9.\-_/]{3,}\b/g) || [];
+  for (const m of matches) {
+    if (!/\d/.test(m)) continue;          // must have a digit
+    if (!/[A-Za-z]/.test(m) && !/[.\-_/]/.test(m)) continue; // not pure-number
+    out.add(m.toUpperCase());
+  }
+  return [...out];
+}
+
+function productMatchesAnySku(product, skus) {
+  const haystack = [];
+  if (typeof product.title === 'string') haystack.push(product.title.toUpperCase());
+  if (typeof product.handle === 'string') haystack.push(product.handle.toUpperCase());
+  const variants = Array.isArray(product.variants)
+    ? product.variants
+    : (product.variants?.nodes || []);
+  for (const v of variants) {
+    if (typeof v?.sku === 'string') haystack.push(v.sku.toUpperCase());
+  }
+  const blob = haystack.join(' ');
+  return skus.some(s => blob.includes(s));
+}
+
 function isLikelyNonSearch(text) {
   if (!text || typeof text !== 'string') return true;
   const t = text.trim();
