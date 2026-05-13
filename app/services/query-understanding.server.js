@@ -31,12 +31,12 @@ JSON schema (every key required; use empty arrays / empty object / null for not-
   "free_text": string                // 2-6 word search phrase capturing what to search. Keep dimension/spec words like "M20", "24VDC", and SKUs intact in natural casing.
 }
 
-Rules for is_search:
-- TRUE when the user is asking to find / buy / browse / compare ANY catalog item — even vague queries like "show me cables" or "do you have anything for safety".
-- TRUE for follow-up questions about a specific product mentioned in prior turns: "show me specs", "tell me more about it", "what's the price", "is it in stock", "what are the dimensions". These reference a real product and should trigger a search to retrieve fresh data.
-- TRUE for filter-style follow-ups: "show me the cheapest one", "the most expensive", "under 1000 AED", "only the ones in stock" — these still operate on the catalog.
-- FALSE for: greetings ("hi", "hello"), acknowledgements ("ok", "thanks", "got it"), pure small talk, off-topic questions ("what time is it", "how are you", "what's the weather"), meta-questions about the chatbot itself ("who are you", "how does this work"), or anything that doesn't reference a product, category, brand, SKU, spec, or shopping action.
-- When unsure, prefer TRUE — a false negative (missed search) is worse than a false positive (an empty search returns gracefully).
+Rules for is_search — the test is "does the page need a NEW set of product cards?":
+- TRUE when the user is asking to BROWSE / FIND a new or different set of products: "show me cables", "do you have any safety items", "I need a 24V contactor", "from Festo", explicit SKU lookups like "DUS60E", or filter changes that meaningfully shift the result set: "another brand", "cheaper alternatives", "smaller bore", "different category".
+- FALSE when the user is asking ABOUT products already shown in this conversation. The cards stay, the reply answers from the prior context. Examples that MUST be FALSE: "tell me more about it", "what's its manufacturer series", "what's the price", "what spec", "is it in stock", "what colors", "what dimensions", "the cheapest one", "the most expensive one", "compare them", "which one for X application".
+- FALSE for greetings ("hi", "hello"), acknowledgements ("ok", "thanks", "got it"), pure small talk, off-topic questions ("what time is it", "how are you"), meta-questions about the chatbot itself ("who are you", "how does this work"), or cart/checkout actions.
+- Tie-breakers: if the user references a previously-shown product implicitly ("it", "that one", "this", "the one above", "the third one"), prefer FALSE — they're asking about existing cards, not searching. If the user names a brand, category, or SKU that does NOT appear in recent conversation, prefer TRUE — that's a new search.
+- When still unsure, prefer FALSE — showing irrelevant cards on a Q&A turn looks worse than answering in text on a search turn.
 
 Rules for the rest:
 - ALL brand names and the category MUST be lowercase. The catalog filters on a lowercased index — mixed-case values will silently miss.
