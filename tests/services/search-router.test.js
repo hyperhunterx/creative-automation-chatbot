@@ -9,6 +9,8 @@ vi.mock('../../app/services/embeddings.server.js', () => ({
 }));
 vi.mock('../../app/services/retrieval.server.js', () => ({
   hybridSearch: vi.fn(),
+  findProductsByTitlePattern: vi.fn().mockResolvedValue([]),
+  findProductsByLiteralPattern: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../../app/services/rerank.server.js', () => ({
   rerank: vi.fn(),
@@ -120,6 +122,44 @@ describe('smartSearch (v6 orchestrator)', () => {
     expect(extractSkuTokens('hi there')).toEqual([]);
     expect(extractSkuTokens('')).toEqual([]);
     expect(extractSkuTokens(null)).toEqual([]);
+  });
+
+  it('drops candidates without the requested slash-pattern (5/2 != 3/2 != 15/2)', async () => {
+    mods.qu.extractIntent.mockResolvedValue({
+      is_search: true,
+      category: 'solenoid valves',
+      brand_include: [],
+      brand_exclude: [],
+      specs: {},
+      spec_values: ['5/2'],
+      free_text: 'solenoid valve 5/2',
+    });
+    mods.em.embedOne.mockResolvedValue(new Array(1024).fill(0.01));
+    // Hybrid returns: one real 5/2 (keep), one 3/2 (drop), one "BP 15/2" lookalike (drop —
+    // substring 5/2 is there but the token in the title is 15/2, not 5/2).
+    mods.re.hybridSearch.mockResolvedValue([
+      { id: 'good',  title: 'Waircom Solenoid Valve 5/2 1/2"', description: '', specs: {} },
+      { id: 'wrong', title: 'SMC Solenoid Valve 3/2 1/4"',     description: '', specs: {} },
+      { id: 'noise', title: 'BP 15/2 magnetic actuator',       description: '', specs: {} },
+    ]);
+    mods.re.findProductsByTitlePattern.mockResolvedValue([]);
+    mods.rk.rerank.mockImplementation(async (_q, items) => items);
+
+    const { smartSearch } = await import('../../app/services/search-router.server.js?case=slash');
+    const out = await smartSearch({
+      messages: [{ role: 'user', content: 'solenoid valve 5/2' }],
+    });
+    expect(out.products.map(p => p.id)).toEqual(['good']);
+  });
+
+  it('productContainsAllPatterns checks word-bounded slash tokens, not substrings', async () => {
+    const { productContainsAllPatterns } = await import('../../app/services/search-router.server.js?case=helper');
+    expect(productContainsAllPatterns({ title: 'Valve 5/2' }, ['5/2'])).toBe(true);
+    expect(productContainsAllPatterns({ title: 'Valve 3/2' }, ['5/2'])).toBe(false);
+    expect(productContainsAllPatterns({ title: 'BP 15/2 actuator' }, ['5/2'])).toBe(false);
+    expect(productContainsAllPatterns({ title: '', description: '', specs: { Type: '5/2' } }, ['5/2'])).toBe(true);
+    expect(productContainsAllPatterns({ title: 'anything' }, [])).toBe(true);
+    expect(productContainsAllPatterns({ title: 'Valve 5/2 and 24V port' }, ['5/2'])).toBe(true);
   });
 
   it('short-circuits when LLM says is_search=false (off-topic)', async () => {

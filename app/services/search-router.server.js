@@ -153,6 +153,16 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
       if (!seen2.has(p.id)) { seen2.add(p.id); candidates.push(p); }
     }
   }
+
+  // Hard slash-pattern post-filter. When the user asked for "5/2", drop any
+  // candidate whose title/description/specs don't literally contain that
+  // pattern. The hybrid path can otherwise pull in BM25 lookalikes ("BP 15/2",
+  // "1/2 NPT") and vector-similar valves with a different port config (3/2
+  // instead of 5/2) that the rerank model doesn't know is a hard constraint.
+  // Better to return an honest empty page than 12 wrong-port valves.
+  if (specPatterns.length > 0) {
+    candidates = candidates.filter(p => productContainsAllPatterns(p, specPatterns));
+  }
   const t3Ms = Date.now() - t3;
 
   if (candidates.length === 0) {
@@ -305,6 +315,27 @@ export function extractSkuTokens(text) {
     out.add(m.toUpperCase());
   }
   return [...out];
+}
+
+// Hard slash-pattern check. A candidate passes only if EVERY requested pattern
+// appears as a word-boundaried slash-token in the product's title, description,
+// or spec values. Word boundaries matter: a "5/2" request must NOT match a
+// product titled "BP 15/2" — the substring is there but the actual port-config
+// token in that title is "15/2", not "5/2". Same regex as extractSlashSpecPatterns
+// so request-side and product-side parse the same way.
+export function productContainsAllPatterns(product, patterns) {
+  if (!Array.isArray(patterns) || patterns.length === 0) return true;
+  const parts = [];
+  if (typeof product.title === 'string') parts.push(product.title);
+  if (typeof product.description === 'string') parts.push(product.description);
+  if (product.specs && typeof product.specs === 'object') {
+    for (const v of Object.values(product.specs)) {
+      if (v != null) parts.push(String(v));
+    }
+  }
+  const blob = parts.join(' ');
+  const productTokens = new Set(blob.match(/\b\d+\/\d+\b/g) || []);
+  return patterns.every(pat => productTokens.has(pat));
 }
 
 function productMatchesAnySku(product, skus) {

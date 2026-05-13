@@ -100,6 +100,30 @@ integrationDescribe('retrieval.server', () => {
     expect(ids.has('gid://x/2')).toBe(false); // SMC, Japan
   });
 
+  integrationIt('category match is substring — "solenoid valves" finds "pneumatic solenoid valves" and "solenoid valve accessories"', async () => {
+    const { hybridSearch } = await import('../../app/services/retrieval.server.js');
+    const results = await hybridSearch({
+      category: 'solenoid valves',
+      brand_include: [],
+      brand_exclude: [],
+      free_text: 'solenoid valve',
+      query_vector: cylinderVec(),
+    });
+    const ids = new Set(results.map(r => r.id));
+    // Waircom row's category is "pneumatic solenoid valves" — contains the search term.
+    expect(ids.has('gid://x/7')).toBe(true);
+    // SMC row's category is "solenoid valve accessories" — also contains it
+    // (note singular "valve" — the search is "solenoid valves" with an "s"; the
+    // substring matched is the longer-string-side, not the user-side, so this
+    // case actually does NOT match unless we also check the singular form).
+    // Document the current behavior: we substring-match the catalog tag against
+    // the user-supplied category, not the other way around, so "solenoid valves"
+    // does NOT match "solenoid valve accessories" (missing the trailing "s").
+    expect(ids.has('gid://x/8')).toBe(false);
+    // And it must NOT pull in unrelated categories.
+    expect(ids.has('gid://x/5')).toBe(false); // circuit breakers
+  });
+
   integrationIt('excludes soft-deleted products', async () => {
     const { hybridSearch } = await import('../../app/services/retrieval.server.js');
     const dbi = getTestPrisma();

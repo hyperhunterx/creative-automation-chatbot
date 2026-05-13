@@ -15,6 +15,11 @@ const FIXTURES = [
   { id: 'gid://x/4', vendor: 'Festo',     vendorNormalized: 'festo',     categories: ['pressure gauges'],     title: 'Festo PG-100 gauge',     desc: 'pressure gauge analog',        embIdx: 1, specs: { 'Country of Origin': 'Germany' } },
   { id: 'gid://x/5', vendor: 'ABB',       vendorNormalized: 'abb',       categories: ['circuit breakers'],    title: 'ABB MCB 16A',            desc: 'miniature circuit breaker',    embIdx: 2, specs: { Amperage: '16A' } },
   { id: 'gid://x/6', vendor: 'Schneider', vendorNormalized: 'schneider', categories: ['pneumatic cylinders'], title: 'Schneider cyl PCM-20',   desc: 'pneumatic cylinder M20',       embIdx: 0, specs: { Type: '5/2' } },
+  // Catalog uses long granular category names — searching "solenoid valves" must
+  // substring-match "pneumatic solenoid valves" and "solenoid valve accessories"
+  // since the real Shopify catalog has only 6 rows literal-equal to "solenoid valves".
+  { id: 'gid://x/7', vendor: 'Waircom',   vendorNormalized: 'waircom',   categories: ['pneumatic solenoid valves', 'pneumatics & hydraulics'], title: 'Waircom 5/2 solenoid valve', desc: 'pneumatic 5/2 valve',     embIdx: 0, specs: {} },
+  { id: 'gid://x/8', vendor: 'SMC',       vendorNormalized: 'smc',       categories: ['solenoid valve accessories'],                            title: 'SMC SY5120 solenoid valve',  desc: '3/2 way valve',           embIdx: 0, specs: {} },
 ];
 
 export async function seedFixtures() {

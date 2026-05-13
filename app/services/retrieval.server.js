@@ -49,11 +49,24 @@ export async function hybridSearch(intent) {
   const ftsClean = (free_text || '').trim() || 'a';
   const vecLit = vectorToPgLiteral(query_vector);
 
-  // Spec-values filter: every required value must appear as a value in the
-  // product's specs JSONB. Key names vary across vendors ("Type" vs "Valve
-  // Function") so we match on values only — a 5/2 valve has `5/2` as some
-  // metafield's value regardless of which key it lives under.
-  // Case-insensitive comparison so user input "germany" matches "Germany".
+  // Spec-values filter: every required value must appear SOMEWHERE the product
+  // carries searchable text — specs JSONB, title, OR description. Specs alone
+  // would be too strict for this catalog: most house-brand listings (Waircom,
+  // Mindman, CPT) have empty metafields, but the actual spec ("5/2", "1/4")
+  // lives in the title. A JSONB-only filter kills those rows even when the
+  // title literally contains the user-requested value, which is the opposite
+  // of what we want. So: pass if the value is in specs OR title OR description.
+  // The strict word-boundary slash-pattern post-filter in search-router still
+  // prevents "5/2" from matching "BP 15/2" lookalikes.
+  //
+  // Category filter uses ILIKE substring match (not equality) because the
+  // catalog stores granular tags like "solenoid valve accessories",
+  // "pneumatic solenoid valves", "valves & taps" — the LLM's coarse "solenoid
+  // valves" would only equal-match 6 rows out of 6,000+. Substring keeps the
+  // filter useful without forcing the LLM to know the catalog's exact tag
+  // vocabulary. The relaxed fallback in search-router still handles the
+  // residual case where the LLM picks a category absent from the catalog
+  // entirely.
   const sql = `
     SELECT id, handle, title, vendor, "vendorNormalized", category, categories, tags, description,
            "priceMin", "priceMax", currency, "imageUrl", available, variants, specs,
@@ -61,16 +74,23 @@ export async function hybridSearch(intent) {
            1 - (embedding <=> $2::vector) AS cos
     FROM products
     WHERE "deletedAt" IS NULL
-      AND ($3::text IS NULL OR $3 = ANY(categories))
+      AND (
+        $3::text IS NULL
+        OR EXISTS (SELECT 1 FROM unnest(categories) c WHERE c ILIKE '%' || $3 || '%')
+      )
       AND (cardinality($4::text[]) = 0 OR "vendorNormalized" = ANY($4))
       AND (cardinality($5::text[]) = 0 OR "vendorNormalized" IS NULL OR "vendorNormalized" <> ALL($5))
       AND (
         cardinality($9::text[]) = 0
         OR NOT EXISTS (
           SELECT 1 FROM unnest($9::text[]) AS required(v)
-          WHERE NOT EXISTS (
-            SELECT 1 FROM jsonb_each_text(specs) AS s
-            WHERE lower(s.value) = lower(required.v)
+          WHERE NOT (
+            EXISTS (
+              SELECT 1 FROM jsonb_each_text(specs) AS s
+              WHERE lower(s.value) = lower(required.v)
+            )
+            OR title ILIKE '%' || required.v || '%'
+            OR description ILIKE '%' || required.v || '%'
           )
         )
       )
@@ -149,7 +169,10 @@ export async function findProductsByLiteralPattern(patterns, filters = {}) {
            "priceMin", "priceMax", currency, "imageUrl", available, variants, specs
     FROM products
     WHERE "deletedAt" IS NULL
-      AND ($1::text IS NULL OR $1 = ANY(categories))
+      AND (
+        $1::text IS NULL
+        OR EXISTS (SELECT 1 FROM unnest(categories) c WHERE c ILIKE '%' || $1 || '%')
+      )
       AND (cardinality($2::text[]) = 0 OR "vendorNormalized" = ANY($2))
       AND (cardinality($3::text[]) = 0 OR "vendorNormalized" IS NULL OR "vendorNormalized" <> ALL($3))
       AND (${literalConds})
