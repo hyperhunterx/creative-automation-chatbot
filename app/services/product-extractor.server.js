@@ -7,17 +7,99 @@ const ENTITIES = {
   '&quot;': '"',
   '&#39;': "'",
   '&nbsp;': ' ',
+  '&deg;': '°',
+  '&micro;': 'µ',
+  '&plusmn;': '±',
+  '&times;': '×',
+  '&le;': '≤',
+  '&ge;': '≥',
+  '&hellip;': '…',
+  '&mdash;': '—',
+  '&ndash;': '–',
+  '&rarr;': '→',
+  '&larr;': '←',
+  '&uarr;': '↑',
+  '&darr;': '↓',
+  '&ldquo;': '"',
+  '&rdquo;': '"',
+  '&lsquo;': "'",
+  '&rsquo;': "'",
+  '&bull;': '•',
+  '&middot;': '·',
+  '&sup2;': '²',
+  '&sup3;': '³',
 };
+
+function decodeEntities(s) {
+  if (typeof s !== 'string') return s;
+  return s
+    .replace(/&[a-z#0-9]+;/gi, m => ENTITIES[m] ?? m)
+    // Numeric entities like &#176; or &#x00B5;
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+}
+
+// Normalize a parsed key from a `<strong>KEY:</strong>` blob entry into the
+// snake_case convention the Shopify metafields use (matches keys like
+// "supply_voltage", "ip_rating", "minimum_operating_temperature"). Trims, drops
+// trailing colons, lowercases, replaces non-alphanumeric runs with a single
+// underscore, and collapses leading/trailing underscores.
+export function normalizeSpecKey(rawKey) {
+  if (typeof rawKey !== 'string') return null;
+  let k = decodeEntities(rawKey).trim();
+  if (!k) return null;
+  if (k.endsWith(':')) k = k.slice(0, -1);
+  k = k.toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return k || null;
+}
+
+// Parses the Creative Automation `product_specification` HTML blob into a
+// flat key/value object.
+//
+// The catalog stores rich specs as HTML inside a single `product_specification`
+// metafield. Across 138,526 products (97% of the catalog), the shape is:
+//   <table>... <li><strong>Key:</strong> Value</li> <li>...</li> ...</table>
+// A second variant (3,523 products) is `<div><ul><li>free text</li>...</ul></div>`
+// with no kv structure — parser returns {} for those, and we leave them alone.
+//
+// Returned keys are snake_cased (so "Cable Length" → "cable_length"). Values
+// are HTML-stripped, entity-decoded, and trimmed but otherwise preserved
+// verbatim ("≤ 6,000 min⁻¹", "+80°C", "10...30 DC", "IP65; IP67; IP68").
+export function parseSpecBlob(blob) {
+  if (typeof blob !== 'string' || !blob.trim()) return {};
+  const out = {};
+  // Capture every `<li>...</li>` block. A handful of Schmersal blobs omit the
+  // closing `</li>` (the next `<li>` opens directly). Use a lookahead boundary
+  // — match content up to `</li>` OR the next `<li>` OR end-of-string — so we
+  // stop at the right place without consuming the boundary marker, letting the
+  // next iteration pick up the following item cleanly.
+  const liRe = /<li\b[^>]*>([\s\S]*?)(?=<\/li>|<li\b|$)/gi;
+  // Inside each `<li>`, find a `<strong>KEY:</strong>` (or `<b>` as a fallback)
+  // followed by the value text up to the close of the `<li>` block.
+  const kvRe = /<(?:strong|b)\b[^>]*>([\s\S]*?)<\/(?:strong|b)>([\s\S]*)/i;
+  let m;
+  while ((m = liRe.exec(blob)) !== null) {
+    const inner = m[1];
+    const kv = inner.match(kvRe);
+    if (!kv) continue;
+    const key = normalizeSpecKey(stripHtml(kv[1]));
+    if (!key) continue;
+    let value = stripHtml(kv[2]).replace(/^[:\s]+/, '').trim();
+    if (!value) continue;
+    out[key] = value;
+  }
+  return out;
+}
 
 export function stripHtml(html) {
   if (!html || typeof html !== 'string') return '';
-  return html
+  const tagsStripped = html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&[a-z#0-9]+;/gi, m => ENTITIES[m] ?? m)
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/<[^>]+>/g, ' ');
+  return decodeEntities(tagsStripped).replace(/\s+/g, ' ').trim();
 }
 
 function pickImageUrl(p) {
@@ -45,6 +127,19 @@ export function flattenMetafields(product) {
     // uses a single namespace per product type, and the keys (Type, Series,
     // Supply Voltage, etc.) are already distinctive enough.
     out[m.key] = String(m.value);
+  }
+  // The `product_specification` metafield is an HTML blob containing the rich
+  // key/value spec table the website renders on product pages (Depth, Length,
+  // Width, Actuator Type, IP Rating, ...). Parse it into individual normalized
+  // keys so retrieval can match dimensional / spec queries directly. Existing
+  // structured metafields take precedence over the parsed values to preserve
+  // canonical Shopify data when both sources happen to carry the same key.
+  const blob = out.product_specification;
+  if (typeof blob === 'string' && blob) {
+    const parsed = parseSpecBlob(blob);
+    for (const [k, v] of Object.entries(parsed)) {
+      if (out[k] == null || out[k] === '') out[k] = v;
+    }
   }
   return out;
 }
