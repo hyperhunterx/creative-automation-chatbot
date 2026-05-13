@@ -27,6 +27,28 @@ function pickImageUrl(p) {
   return first || null;
 }
 
+// Shopify metafield types we treat as plain key/value pairs for filtering
+// and display. Skip reference-style types (`*_reference`, `file_reference`,
+// `metaobject_reference`, etc.) — those resolve to GIDs that aren't useful
+// for direct catalog search.
+const METAFIELD_REFERENCE_RE = /reference/i;
+
+export function flattenMetafields(product) {
+  const nodes = product?.metafields?.nodes;
+  if (!Array.isArray(nodes)) return {};
+  const out = {};
+  for (const m of nodes) {
+    if (!m || typeof m.key !== 'string' || !m.key.trim()) continue;
+    if (m.value == null || m.value === '') continue;
+    if (typeof m.type === 'string' && METAFIELD_REFERENCE_RE.test(m.type)) continue;
+    // Use the bare key (no namespace prefix) — the catalog conventionally
+    // uses a single namespace per product type, and the keys (Type, Series,
+    // Supply Voltage, etc.) are already distinctive enough.
+    out[m.key] = String(m.value);
+  }
+  return out;
+}
+
 function variantsToRows(variantsField) {
   const nodes = variantsField?.nodes
     || (Array.isArray(variantsField) ? variantsField : null)
@@ -134,7 +156,7 @@ export function extractProductRow(shopifyProduct) {
     currency,
     imageUrl: pickImageUrl(p),
     available: variants.some(v => v.available),
-    specs: {},
+    specs: flattenMetafields(p),
     variants,
     shopifyUpdatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString() : null,
     textForEmbedding,

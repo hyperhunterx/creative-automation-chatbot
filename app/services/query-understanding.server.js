@@ -10,7 +10,8 @@
 //     category: string | null,        // lowercase, granular tag-style, e.g. "pneumatic guided cylinders"
 //     brand_include: string[],         // lowercase brand names
 //     brand_exclude: string[],         // lowercase brand names
-//     specs: object,
+//     specs: object,                   // unused (legacy slot); use spec_values for filtering
+//     spec_values: string[],           // exact spec values to filter on — e.g. ["5/2"] for port config, ["24V"] for voltage
 //     free_text: string                // 2-6 word search phrase, natural casing
 //   }
 
@@ -27,7 +28,8 @@ JSON schema (every key required; use empty arrays / empty object / null for not-
   "category": string | null,        // LOWERCASE granular product category matching how the catalog tags products, e.g. "pneumatic guided cylinders", "motion control sensors", "inverter drives", "damper actuators", "sensor & actuator cables". Prefer the most specific category that fits the user's intent. Use null if the user hasn't asked about a specific product family.
   "brand_include": string[],         // LOWERCASE brand names the user wants to see; empty = any brand. Example: ["smc", "festo"]
   "brand_exclude": string[],         // LOWERCASE brand names the user does NOT want. Example: user says "from another brand" after seeing Festo → ["festo"]
-  "specs": object,                   // attribute filters, flat key/value, e.g. {"bore_mm": 20}; empty if none
+  "specs": object,                   // legacy slot; leave empty {} unless specifically asked to use it
+  "spec_values": string[],           // EXACT spec values to filter on. The catalog stores rich metafields per product (Type, Supply Voltage, Number of Ports, Connection Size, Body Material, Country of Origin, etc.). Put just the VALUE here — the retrieval layer matches it against any metafield value. Examples: user says "5/2 solenoid valve" → ["5/2"]. User says "24V" or "24 V ac" → ["24V"] or ["24 V ac"] (use the canonical form most likely to appear in spec sheets). User says "G 1/4 thread" → ["G 1/4"]. User says "made in Germany" → ["Germany"]. Empty array if no spec filter applies.
   "free_text": string                // 2-6 word search phrase capturing what to search. Keep dimension/spec words like "M20", "24VDC", and SKUs intact in natural casing.
 }
 
@@ -70,6 +72,7 @@ function fallbackIntent(rawMessage) {
     brand_include: [],
     brand_exclude: [],
     specs: {},
+    spec_values: [],
     free_text: rawMessage || '',
   };
 }
@@ -85,6 +88,21 @@ function toLowerStringArray(arr) {
   return [...out];
 }
 
+function trimmedStringArray(arr) {
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const v of arr) {
+    if (typeof v !== 'string') continue;
+    const trimmed = v.trim();
+    if (!trimmed) continue;
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 function normalize(parsed, rawMessage) {
   if (!parsed || typeof parsed !== 'object') return fallbackIntent(rawMessage);
   const categoryRaw = typeof parsed.category === 'string' ? parsed.category.trim() : '';
@@ -97,6 +115,7 @@ function normalize(parsed, rawMessage) {
     brand_include: toLowerStringArray(parsed.brand_include),
     brand_exclude: toLowerStringArray(parsed.brand_exclude),
     specs: parsed.specs && typeof parsed.specs === 'object' ? parsed.specs : {},
+    spec_values: trimmedStringArray(parsed.spec_values),
     free_text: typeof parsed.free_text === 'string' && parsed.free_text.trim() ? parsed.free_text.trim() : (rawMessage || ''),
   };
 }

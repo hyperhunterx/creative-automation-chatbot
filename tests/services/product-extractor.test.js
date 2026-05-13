@@ -6,6 +6,7 @@ import {
   normalizeVendor,
   deriveCategories,
   isJunkProductType,
+  flattenMetafields,
 } from '../../app/services/product-extractor.server.js';
 
 describe('stripHtml', () => {
@@ -85,6 +86,48 @@ describe('deriveCategories', () => {
   });
 });
 
+describe('flattenMetafields', () => {
+  it('flattens metafield nodes into a plain key/value object', () => {
+    const product = {
+      metafields: {
+        nodes: [
+          { namespace: 'specs', key: 'Type', value: '5/2', type: 'single_line_text_field' },
+          { namespace: 'specs', key: 'Series', value: 'DSNU', type: 'single_line_text_field' },
+        ],
+      },
+    };
+    expect(flattenMetafields(product)).toEqual({ Type: '5/2', Series: 'DSNU' });
+  });
+  it('skips reference-type metafields (GIDs are useless for filtering)', () => {
+    const product = {
+      metafields: {
+        nodes: [
+          { namespace: 'specs', key: 'Body Material', value: 'Aluminum', type: 'single_line_text_field' },
+          { namespace: 'specs', key: 'Featured Image', value: 'gid://shopify/MediaImage/1', type: 'file_reference' },
+          { namespace: 'specs', key: 'Datasheet', value: 'gid://shopify/Metaobject/2', type: 'metaobject_reference' },
+        ],
+      },
+    };
+    expect(flattenMetafields(product)).toEqual({ 'Body Material': 'Aluminum' });
+  });
+  it('skips empty / null values', () => {
+    const product = {
+      metafields: {
+        nodes: [
+          { namespace: 'specs', key: 'A', value: 'x' },
+          { namespace: 'specs', key: 'B', value: '' },
+          { namespace: 'specs', key: 'C', value: null },
+        ],
+      },
+    };
+    expect(flattenMetafields(product)).toEqual({ A: 'x' });
+  });
+  it('returns empty object when product has no metafields', () => {
+    expect(flattenMetafields({})).toEqual({});
+    expect(flattenMetafields(null)).toEqual({});
+  });
+});
+
 describe('extractProductRow', () => {
   it('extracts core fields from a Shopify GraphQL product', () => {
     const row = extractProductRow(fixture);
@@ -157,6 +200,17 @@ describe('extractProductRow', () => {
     expect(row.priceMin).toBe('99.50');
     expect(row.priceMax).toBe('129.99');
     expect(row.currency).toBe('AED');
+  });
+
+  it('populates specs from metafield nodes (drops reference types)', () => {
+    const row = extractProductRow(fixture);
+    expect(row.specs).toEqual({
+      Type: '5/2',
+      Series: 'DSNU',
+      'Country of Origin': 'Germany',
+      'Body Material': 'Aluminum',
+    });
+    expect(row.specs).not.toHaveProperty('Featured Image');
   });
 
   it('handles real-catalog-shape product (Smc cylinder with brand-prefixed tags)', () => {

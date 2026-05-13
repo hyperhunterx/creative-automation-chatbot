@@ -23,5 +23,14 @@
         "availableForSale": true
       }
     ]
+  },
+  "metafields": {
+    "nodes": [
+      { "namespace": "specs", "key": "Type", "value": "5/2", "type": "single_line_text_field" },
+      { "namespace": "specs", "key": "Series", "value": "DSNU", "type": "single_line_text_field" },
+      { "namespace": "specs", "key": "Country of Origin", "value": "Germany", "type": "single_line_text_field" },
+      { "namespace": "specs", "key": "Body Material", "value": "Aluminum", "type": "single_line_text_field" },
+      { "namespace": "specs", "key": "Featured Image", "value": "gid://shopify/MediaImage/123", "type": "file_reference" }
+    ]
   }
 }

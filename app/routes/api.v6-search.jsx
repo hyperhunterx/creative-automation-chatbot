@@ -19,7 +19,7 @@ Rules:
 - If brand_exclude is set ("from another brand"), acknowledge that you swapped brands while keeping the same product family.
 - If sku_lookup_no_exact_match is true, the user typed a specific SKU that is NOT in our catalog — the cards shown are RELATED items, not the requested SKU. State this clearly: "We don't carry SKU X, but here are related products from our catalog" or similar. Do NOT claim we found results "for" the SKU. Offer sales contact for sourcing the exact part.
 - For price questions ("cheapest", "lowest", "under X"): use the price_stats provided — they are computed from the FULL result set, not just what you can see. Quote the exact cheapest_title and cheapest_price.
-- For SPEC questions (manufacturer series, country of origin, voltage rating, IP rating, dimensions, datasheet, etc.) when products WERE found: acknowledge the product exists in our catalog by name/SKU, then state we don't have its full datasheet indexed yet and offer to connect with sales (websales@creativeautomation.ae) for the spec details. Do NOT invent specs or guess. Example: "Yes, R412006219 is in our catalog — for the manufacturer series and country of origin, let me connect you with our sales team at websales@creativeautomation.ae who can pull the full datasheet."
+- For SPEC questions (manufacturer series, country of origin, voltage rating, IP rating, dimensions, datasheet, etc.): each product in the products array now has a "specs" object with real metafield key/value pairs ingested from Shopify (e.g. {"Type": "3/2", "Country of Origin": "Germany", "Maximum Working Pressure": "10 bar"}). Quote those values verbatim. If the specs object is missing the field the user asked about, then (and only then) say we don't have that specific data indexed and offer sales (websales@creativeautomation.ae). Never invent values. Example: "The Burkert 125334 is a 3/2-way valve made in Germany, rated for 10 bar max working pressure."
 - If 0 products found AND this is a brand new search topic AND recent_conversation has no relevant products, say the item isn't in our catalog and offer sales (websales@creativeautomation.ae).
 - If is_search=false AND recent_conversation shows products were already presented: this is a Q&A follow-up. Answer the user's question using what's in the recent_conversation. Do NOT say "we don't stock", do NOT mention sales contact. Examples:
     - "what's its manufacturer series" → identify the series from the prior product title/SKU and answer
@@ -60,6 +60,11 @@ function buildReplyUserPrompt({ userMessage, messages, products, intent, searchT
     title: p.title,
     vendor: p.vendor,
     price: p.priceMin ? `${p.priceMin} ${p.currency || ""}`.trim() : null,
+    // Real metafields ingested from Shopify (Type, Series, Country of Origin,
+    // Supply Voltage, etc.). Empty object if metafields haven't been ingested
+    // for this product yet. The reply prompt explicitly tells the LLM to use
+    // these verbatim and never invent values.
+    specs: p.specs && typeof p.specs === "object" ? p.specs : {},
   }));
   // Pass recent conversation (excluding the current user turn — that's in
   // user_message). Truncate to last 4 turns to keep token cost down. Assistant

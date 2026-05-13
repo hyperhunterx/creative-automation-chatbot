@@ -4,35 +4,45 @@
 // reconciliation endpoint) run outside the per-request shop session lifecycle
 // and authenticate with a fixed Admin access token.
 
+const PRODUCT_NODE_FIELDS = `
+  id
+  handle
+  title
+  vendor
+  productType
+  tags
+  descriptionHtml
+  updatedAt
+  featuredMedia {
+    preview { image { url } }
+  }
+  priceRangeV2 {
+    minVariantPrice { amount currencyCode }
+    maxVariantPrice { amount currencyCode }
+  }
+  variants(first: 50) {
+    nodes {
+      id
+      sku
+      price
+      availableForSale
+    }
+  }
+  metafields(first: 50) {
+    nodes {
+      namespace
+      key
+      value
+      type
+    }
+  }
+`;
+
 const PRODUCTS_QUERY = `
   query Products($first: Int!, $after: String) {
     products(first: $first, after: $after) {
       pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        handle
-        title
-        vendor
-        productType
-        tags
-        descriptionHtml
-        updatedAt
-        featuredMedia {
-          preview { image { url } }
-        }
-        priceRangeV2 {
-          minVariantPrice { amount currencyCode }
-          maxVariantPrice { amount currencyCode }
-        }
-        variants(first: 50) {
-          nodes {
-            id
-            sku
-            price
-            availableForSale
-          }
-        }
-      }
+      nodes { ${PRODUCT_NODE_FIELDS} }
     }
   }
 `;

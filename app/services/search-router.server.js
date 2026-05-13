@@ -84,20 +84,27 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   const t2Ms = Date.now() - t2;
 
   // Step 3 — hybrid retrieval
-  // Industrial spec patterns like "5/2", "3/2", "1/4" get destroyed by the
-  // Postgres `simple` tsvector tokenizer (slash splits them into pair-of-
-  // single-digit tokens that BM25 weights as noise). Detect those patterns and
-  // run a literal-pattern title query in parallel so spec-matched products
-  // make it into the candidate pool even when BM25 buries them.
+  // Two paths run in parallel:
+  //  (a) hybridSearch with structured spec_values filter (JSONB containment)
+  //  (b) findProductsByLiteralPattern for slash-style specs (5/2, 3/2, 1/4)
+  //      that the Postgres `simple` tsvector tokenizer destroys.
+  // Spec patterns from the user message are also added to LLM-extracted
+  // spec_values so the structured filter catches both.
   const t3 = Date.now();
   const specPatterns = extractSlashSpecPatterns(intent.free_text);
+  const mergedSpecValues = mergeUnique(intent.spec_values || [], specPatterns);
   const filters = {
     category: intent.category,
     brand_include: intent.brand_include,
     brand_exclude: intent.brand_exclude,
   };
   const [hybridResults, specResults] = await Promise.all([
-    hybridSearch({ ...filters, free_text: intent.free_text, query_vector: queryVector }),
+    hybridSearch({
+      ...filters,
+      spec_values: mergedSpecValues,
+      free_text: intent.free_text,
+      query_vector: queryVector,
+    }),
     specPatterns.length > 0
       ? findProductsByTitlePattern(specPatterns, { ...filters, limit: 20 })
       : Promise.resolve([]),
@@ -127,7 +134,12 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
       brand_exclude: intent.brand_exclude,
     };
     const [relaxedHybrid, relaxedSpec] = await Promise.all([
-      hybridSearch({ ...relaxedFilters, free_text: intent.free_text, query_vector: queryVector }),
+      hybridSearch({
+        ...relaxedFilters,
+        spec_values: mergedSpecValues,
+        free_text: intent.free_text,
+        query_vector: queryVector,
+      }),
       specPatterns.length > 0
         ? findProductsByTitlePattern(specPatterns, { ...relaxedFilters, limit: 20 })
         : Promise.resolve([]),
@@ -254,6 +266,21 @@ const NON_SEARCH_PATTERNS = [
   /^(bye|goodbye|cya)[!. ?]*$/i,
   /^(yes|no|yeah|nope|sure|maybe)[!. ?]*$/i,
 ];
+function mergeUnique(...arrays) {
+  const seen = new Set();
+  const out = [];
+  for (const arr of arrays) {
+    if (!Array.isArray(arr)) continue;
+    for (const v of arr) {
+      const key = String(v).trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+    }
+  }
+  return out;
+}
+
 // Extract slash-separated numeric spec patterns (5/2, 3/2, 1/4, etc.) that
 // the Postgres `simple` tsvector tokenizer destroys. Used to drive a literal-
 // pattern title query alongside the hybrid search so spec-matched products

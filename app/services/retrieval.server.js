@@ -17,7 +17,7 @@ import { RETRIEVAL_CONFIG } from './config.server.js';
  * @param {string|null} intent.category       lowercased granular tag, e.g. "pneumatic guided cylinders"
  * @param {string[]}    intent.brand_include  lowercased brand names
  * @param {string[]}    intent.brand_exclude  lowercased brand names
- * @param {object}      intent.specs          (jsonb-containment filter; v1: ignored)
+ * @param {string[]}    intent.spec_values    metafield values that MUST be present in product.specs
  * @param {string}      intent.free_text
  * @param {number[]}    intent.query_vector   (1024 dims)
  * @returns {Promise<Array<row>>} up to RETRIEVAL_CONFIG.candidatePoolSize rows
@@ -27,6 +27,7 @@ export async function hybridSearch(intent) {
     category = null,
     brand_include = [],
     brand_exclude = [],
+    spec_values = [],
     free_text = '',
     query_vector,
   } = intent || {};
@@ -42,14 +43,20 @@ export async function hybridSearch(intent) {
   const categoryNorm = category ? String(category).trim().toLowerCase() || null : null;
   const includeNorm = (brand_include || []).map(b => String(b).trim().toLowerCase()).filter(Boolean);
   const excludeNorm = (brand_exclude || []).map(b => String(b).trim().toLowerCase()).filter(Boolean);
+  const specValuesNorm = (spec_values || []).map(s => String(s).trim()).filter(Boolean);
 
   // tsquery cannot be the empty string; use a placeholder when free_text is blank.
   const ftsClean = (free_text || '').trim() || 'a';
   const vecLit = vectorToPgLiteral(query_vector);
 
+  // Spec-values filter: every required value must appear as a value in the
+  // product's specs JSONB. Key names vary across vendors ("Type" vs "Valve
+  // Function") so we match on values only — a 5/2 valve has `5/2` as some
+  // metafield's value regardless of which key it lives under.
+  // Case-insensitive comparison so user input "germany" matches "Germany".
   const sql = `
     SELECT id, handle, title, vendor, "vendorNormalized", category, categories, tags, description,
-           "priceMin", "priceMax", currency, "imageUrl", available, variants,
+           "priceMin", "priceMax", currency, "imageUrl", available, variants, specs,
            ts_rank_cd("searchTsv", plainto_tsquery('simple', $1)) AS bm25,
            1 - (embedding <=> $2::vector) AS cos
     FROM products
@@ -57,6 +64,16 @@ export async function hybridSearch(intent) {
       AND ($3::text IS NULL OR $3 = ANY(categories))
       AND (cardinality($4::text[]) = 0 OR "vendorNormalized" = ANY($4))
       AND (cardinality($5::text[]) = 0 OR "vendorNormalized" IS NULL OR "vendorNormalized" <> ALL($5))
+      AND (
+        cardinality($9::text[]) = 0
+        OR NOT EXISTS (
+          SELECT 1 FROM unnest($9::text[]) AS required(v)
+          WHERE NOT EXISTS (
+            SELECT 1 FROM jsonb_each_text(specs) AS s
+            WHERE lower(s.value) = lower(required.v)
+          )
+        )
+      )
     ORDER BY ($6 * ts_rank_cd("searchTsv", plainto_tsquery('simple', $1))
               + $7 * (1 - (embedding <=> $2::vector))) DESC
     LIMIT $8
@@ -72,6 +89,7 @@ export async function hybridSearch(intent) {
     RETRIEVAL_CONFIG.bm25Weight,
     RETRIEVAL_CONFIG.vectorWeight,
     RETRIEVAL_CONFIG.candidatePoolSize,
+    specValuesNorm,
   );
 
   return rows;
@@ -109,16 +127,26 @@ export async function findProductsByLiteralPattern(patterns, filters = {}) {
   const includeNorm = (brand_include || []).map(b => String(b).trim().toLowerCase()).filter(Boolean);
   const excludeNorm = (brand_exclude || []).map(b => String(b).trim().toLowerCase()).filter(Boolean);
 
-  // Build "(title ILIKE '%patN%' OR description ILIKE '%patN%') OR ..." dynamically.
-  // Patterns start at parameter index 4 (after categoryNorm, includeNorm,
-  // excludeNorm). Limit is appended last.
+  // Build "(title ILIKE '%patN%' OR description ILIKE '%patN%' OR EXISTS(specs value match)) OR ..."
+  // dynamically. Patterns start at parameter index 4 (after categoryNorm,
+  // includeNorm, excludeNorm). Limit is appended last.
+  //
+  // The specs check is what lets us catch products like Burkert 125334 where
+  // the 3/2 spec lives only in the metafield map, never in title or text.
   const literalConds = patterns
-    .map((_, i) => `(title ILIKE '%' || $${4 + i} || '%' OR description ILIKE '%' || $${4 + i} || '%')`)
+    .map((_, i) => `(
+        title ILIKE '%' || $${4 + i} || '%'
+        OR description ILIKE '%' || $${4 + i} || '%'
+        OR EXISTS (
+          SELECT 1 FROM jsonb_each_text(specs) AS s
+          WHERE lower(s.value) = lower($${4 + i})
+        )
+      )`)
     .join(' OR ');
 
   const sql = `
     SELECT id, handle, title, vendor, "vendorNormalized", category, categories, tags, description,
-           "priceMin", "priceMax", currency, "imageUrl", available, variants
+           "priceMin", "priceMax", currency, "imageUrl", available, variants, specs
     FROM products
     WHERE "deletedAt" IS NULL
       AND ($1::text IS NULL OR $1 = ANY(categories))

@@ -130,6 +130,38 @@ describe('extractIntent', () => {
     expect(intent.free_text).toBe('M20 cylinder');
   });
 
+  it('extracts spec_values for industrial spec queries', async () => {
+    llm.chatJson.mockResolvedValue({
+      is_search: true,
+      category: 'solenoid valves',
+      brand_include: [],
+      brand_exclude: [],
+      specs: {},
+      spec_values: ['5/2'],
+      free_text: 'solenoid valve 5/2',
+    });
+    const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=specvals');
+    const intent = await extractIntent({ messages: [{ role: 'user', content: 'solenoid valve 5/2' }] });
+    expect(intent.spec_values).toEqual(['5/2']);
+  });
+
+  it('preserves casing of spec values (Germany, G 1/4) but dedupes', async () => {
+    llm.chatJson.mockResolvedValue({
+      spec_values: ['Germany', 'Germany', ' G 1/4 ', '24V'],
+      free_text: 'made in germany 24V',
+    });
+    const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=specvals2');
+    const intent = await extractIntent({ messages: [{ role: 'user', content: 'made in germany 24V' }] });
+    expect(intent.spec_values).toEqual(['Germany', 'G 1/4', '24V']);
+  });
+
+  it('defaults spec_values to [] when omitted', async () => {
+    llm.chatJson.mockResolvedValue({ category: 'cables', free_text: 'cables' });
+    const { extractIntent } = await import('../../app/services/query-understanding.server.js?case=specvals3');
+    const intent = await extractIntent({ messages: [{ role: 'user', content: 'cables' }] });
+    expect(intent.spec_values).toEqual([]);
+  });
+
   it('filters out non-string entries from brand_include/exclude arrays', async () => {
     llm.chatJson.mockResolvedValue({
       category: 'relays',
