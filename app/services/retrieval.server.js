@@ -81,17 +81,22 @@ export async function hybridSearch(intent) {
  * Literal-pattern fallback for industrial spec tokens that the Postgres tsvector
  * `simple` config tokenizes badly. Slash-separated numerics like "5/2", "3/2",
  * "1/4" get split into pair-of-single-digit tokens by BM25 and lose all signal.
- * This query finds products whose title contains any of the patterns as a
- * substring, respecting the same category / brand filters as hybridSearch.
+ * This query finds products whose title OR description literally contains any
+ * of the patterns, respecting the same category / brand filters as hybridSearch.
  *
- * @param {string[]} patterns           literal substrings to match in title
+ * Note: spec values often live ONLY in the description text or metafields, not
+ * the title — e.g. "Burkert Solenoid Valves 125334" with description
+ * "3/2-way-solenoid valve, direct". Searching both surfaces matches that title-
+ * only filtering would miss.
+ *
+ * @param {string[]} patterns           literal substrings to match
  * @param {object} filters
  * @param {string|null} filters.category
  * @param {string[]} filters.brand_include
  * @param {string[]} filters.brand_exclude
  * @param {number} [filters.limit]      max rows returned (default 20)
  */
-export async function findProductsByTitlePattern(patterns, filters = {}) {
+export async function findProductsByLiteralPattern(patterns, filters = {}) {
   if (!Array.isArray(patterns) || patterns.length === 0) return [];
   const {
     category = null,
@@ -104,11 +109,11 @@ export async function findProductsByTitlePattern(patterns, filters = {}) {
   const includeNorm = (brand_include || []).map(b => String(b).trim().toLowerCase()).filter(Boolean);
   const excludeNorm = (brand_exclude || []).map(b => String(b).trim().toLowerCase()).filter(Boolean);
 
-  // Build "title ILIKE '%pat1%' OR title ILIKE '%pat2%' OR ..." dynamically.
+  // Build "(title ILIKE '%patN%' OR description ILIKE '%patN%') OR ..." dynamically.
   // Patterns start at parameter index 4 (after categoryNorm, includeNorm,
   // excludeNorm). Limit is appended last.
-  const titleConds = patterns
-    .map((_, i) => `title ILIKE '%' || $${4 + i} || '%'`)
+  const literalConds = patterns
+    .map((_, i) => `(title ILIKE '%' || $${4 + i} || '%' OR description ILIKE '%' || $${4 + i} || '%')`)
     .join(' OR ');
 
   const sql = `
@@ -119,7 +124,7 @@ export async function findProductsByTitlePattern(patterns, filters = {}) {
       AND ($1::text IS NULL OR $1 = ANY(categories))
       AND (cardinality($2::text[]) = 0 OR "vendorNormalized" = ANY($2))
       AND (cardinality($3::text[]) = 0 OR "vendorNormalized" IS NULL OR "vendorNormalized" <> ALL($3))
-      AND (${titleConds})
+      AND (${literalConds})
     LIMIT $${4 + patterns.length}
   `;
 
@@ -132,3 +137,6 @@ export async function findProductsByTitlePattern(patterns, filters = {}) {
     limit,
   );
 }
+
+// Back-compat alias for callers (search-router) — same behavior, new name above.
+export const findProductsByTitlePattern = findProductsByLiteralPattern;
