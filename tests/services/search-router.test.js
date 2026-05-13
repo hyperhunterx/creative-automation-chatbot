@@ -98,6 +98,17 @@ describe('smartSearch (v6 orchestrator)', () => {
     expect(out.products).toEqual([]);
   });
 
+  it('extractSlashSpecPatterns finds industrial spec tokens like 5/2, 3/2, 1/4', async () => {
+    const { extractSlashSpecPatterns } = await import('../../app/services/search-router.server.js?case=spec');
+    expect(extractSlashSpecPatterns('solenoid valve 5/2')).toEqual(['5/2']);
+    expect(extractSlashSpecPatterns('I need a 3/2 valve and a 5/2 valve')).toEqual(['3/2', '5/2']);
+    expect(extractSlashSpecPatterns('filter regulator G 1/4 BSP')).toEqual(['1/4']);
+    expect(extractSlashSpecPatterns('limit switches please')).toEqual([]);
+    expect(extractSlashSpecPatterns('R412006218')).toEqual([]); // SKU, not a spec
+    expect(extractSlashSpecPatterns('')).toEqual([]);
+    expect(extractSlashSpecPatterns(null)).toEqual([]);
+  });
+
   it('extractSkuTokens recognizes real SKU shapes and rejects ordinary words', async () => {
     const { extractSkuTokens } = await import('../../app/services/search-router.server.js?case=sku');
     expect(extractSkuTokens('R412006218')).toEqual(['R412006218']);

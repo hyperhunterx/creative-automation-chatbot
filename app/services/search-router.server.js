@@ -10,7 +10,7 @@
 
 import { extractIntent } from './query-understanding.server.js';
 import { embedOne } from './embeddings.server.js';
-import { hybridSearch } from './retrieval.server.js';
+import { hybridSearch, findProductsByTitlePattern } from './retrieval.server.js';
 import { rerank } from './rerank.server.js';
 import { RETRIEVAL_CONFIG } from './config.server.js';
 
@@ -84,14 +84,35 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   const t2Ms = Date.now() - t2;
 
   // Step 3 — hybrid retrieval
+  // Industrial spec patterns like "5/2", "3/2", "1/4" get destroyed by the
+  // Postgres `simple` tsvector tokenizer (slash splits them into pair-of-
+  // single-digit tokens that BM25 weights as noise). Detect those patterns and
+  // run a literal-pattern title query in parallel so spec-matched products
+  // make it into the candidate pool even when BM25 buries them.
   const t3 = Date.now();
-  let candidates = await hybridSearch({
+  const specPatterns = extractSlashSpecPatterns(intent.free_text);
+  const filters = {
     category: intent.category,
     brand_include: intent.brand_include,
     brand_exclude: intent.brand_exclude,
-    free_text: intent.free_text,
-    query_vector: queryVector,
-  });
+  };
+  const [hybridResults, specResults] = await Promise.all([
+    hybridSearch({ ...filters, free_text: intent.free_text, query_vector: queryVector }),
+    specPatterns.length > 0
+      ? findProductsByTitlePattern(specPatterns, { ...filters, limit: 20 })
+      : Promise.resolve([]),
+  ]);
+  // Merge: spec-pattern matches first (most relevant for industrial queries),
+  // then hybrid results, dedup'd by id.
+  const seen = new Set();
+  let candidates = [];
+  for (const p of specResults) {
+    if (!seen.has(p.id)) { seen.add(p.id); candidates.push(p); }
+  }
+  for (const p of hybridResults) {
+    if (!seen.has(p.id)) { seen.add(p.id); candidates.push(p); }
+  }
+  const specBoosted = specResults.length > 0;
   let categoryRelaxed = false;
   // If the LLM-extracted category was too narrow to match any catalog tag
   // verbatim (e.g. "pneumatic cylinders" when the catalog stores
@@ -100,13 +121,25 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   // worth defending hard. The rerank step still favors topical relevance.
   if (candidates.length === 0 && intent.category) {
     categoryRelaxed = true;
-    candidates = await hybridSearch({
+    const relaxedFilters = {
       category: null,
       brand_include: intent.brand_include,
       brand_exclude: intent.brand_exclude,
-      free_text: intent.free_text,
-      query_vector: queryVector,
-    });
+    };
+    const [relaxedHybrid, relaxedSpec] = await Promise.all([
+      hybridSearch({ ...relaxedFilters, free_text: intent.free_text, query_vector: queryVector }),
+      specPatterns.length > 0
+        ? findProductsByTitlePattern(specPatterns, { ...relaxedFilters, limit: 20 })
+        : Promise.resolve([]),
+    ]);
+    const seen2 = new Set();
+    candidates = [];
+    for (const p of relaxedSpec) {
+      if (!seen2.has(p.id)) { seen2.add(p.id); candidates.push(p); }
+    }
+    for (const p of relaxedHybrid) {
+      if (!seen2.has(p.id)) { seen2.add(p.id); candidates.push(p); }
+    }
   }
   const t3Ms = Date.now() - t3;
 
@@ -187,6 +220,7 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
     returned: top.length,
     embed_fallback: embedFallback,
     category_relaxed: categoryRelaxed,
+    spec_boosted: specBoosted,
     sku_filtered: skuFiltered,
     sku_lookup_no_exact_match: skuLookupNoExactMatch,
     top3_ids: top.slice(0, 3).map(p => p.id),
@@ -196,6 +230,7 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   if (skuFiltered) searchType = 'hybrid_sku';
   else if (skuLookupNoExactMatch) searchType = 'hybrid_sku_no_match';
   else if (categoryRelaxed) searchType = 'hybrid_category_relaxed';
+  else if (specBoosted) searchType = 'hybrid_spec';
 
   return {
     products: top,
@@ -219,6 +254,16 @@ const NON_SEARCH_PATTERNS = [
   /^(bye|goodbye|cya)[!. ?]*$/i,
   /^(yes|no|yeah|nope|sure|maybe)[!. ?]*$/i,
 ];
+// Extract slash-separated numeric spec patterns (5/2, 3/2, 1/4, etc.) that
+// the Postgres `simple` tsvector tokenizer destroys. Used to drive a literal-
+// pattern title query alongside the hybrid search so spec-matched products
+// don't get lost in BM25's blind spot.
+export function extractSlashSpecPatterns(text) {
+  if (!text || typeof text !== 'string') return [];
+  const matches = text.match(/\b\d+\/\d+\b/g) || [];
+  return [...new Set(matches)];
+}
+
 // Extract tokens that look like a product SKU from arbitrary free-text:
 // alphanumeric, at least 4 chars, contains at least one digit. Hyphens / dots /
 // slashes inside are kept (e.g. "DSNU-20-50-P-A"). Pure words ("filter") and
