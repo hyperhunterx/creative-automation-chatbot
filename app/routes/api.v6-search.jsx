@@ -14,8 +14,10 @@ const REPLY_SYSTEM_PROMPT = `You are the AI sales assistant for Creative Industr
 Rules:
 - Reply in 1-2 short sentences. No bullet lists, no markdown tables, no SKU dumps.
 - Product cards are already displayed in the UI — do not describe individual products. Acknowledge the result and offer one helpful next step.
-- Mention the number found, the product family, and (if relevant) which brand(s) are present.
+- The "count" you see is the number of TOP MATCHES shown on the page, NOT the total stock. Phrase accordingly: say "here are 12 top matches", "showing the top 12", or "12 closest matches" — NEVER "we have 12 in stock" or "we found 12 X" (which implies 12 is the total catalog count for that product family).
+- Mention the product family and (if relevant) which brand(s) are present.
 - If brand_exclude is set ("from another brand"), acknowledge that you swapped brands while keeping the same product family.
+- If sku_lookup_no_exact_match is true, the user typed a specific SKU that is NOT in our catalog — the cards shown are RELATED items, not the requested SKU. State this clearly: "We don't carry SKU X, but here are related products from our catalog" or similar. Do NOT claim we found results "for" the SKU. Offer sales contact for sourcing the exact part.
 - For price questions ("cheapest", "lowest", "under X"): use the price_stats provided — they are computed from the FULL result set, not just what you can see. Quote the exact cheapest_title and cheapest_price.
 - For SPEC questions (manufacturer series, country of origin, voltage rating, IP rating, dimensions, datasheet, etc.) when products WERE found: acknowledge the product exists in our catalog by name/SKU, then state we don't have its full datasheet indexed yet and offer to connect with sales (websales@creativeautomation.ae) for the spec details. Do NOT invent specs or guess. Example: "Yes, R412006219 is in our catalog — for the manufacturer series and country of origin, let me connect you with our sales team at websales@creativeautomation.ae who can pull the full datasheet."
 - If 0 products found AND this is a brand new search topic AND recent_conversation has no relevant products, say the item isn't in our catalog and offer sales (websales@creativeautomation.ae).
@@ -50,7 +52,7 @@ function computePriceStats(products) {
   };
 }
 
-function buildReplyUserPrompt({ userMessage, messages, products, intent, searchType }) {
+function buildReplyUserPrompt({ userMessage, messages, products, intent, searchType, skuLookupNoExactMatch, skuTokens }) {
   // Pass ALL returned products (capped at 12, which is finalResultSize). The
   // LLM needs visibility into the full set so price/spec-based reasoning is
   // grounded in real data, not the first few results by relevance.
@@ -82,6 +84,8 @@ function buildReplyUserPrompt({ userMessage, messages, products, intent, searchT
           brand_exclude: intent.brand_exclude,
         },
         count: products.length,
+        sku_lookup_no_exact_match: Boolean(skuLookupNoExactMatch),
+        requested_sku: skuTokens && skuTokens.length > 0 ? skuTokens.join(", ") : null,
         products: productList,
         price_stats: computePriceStats(products),
       },
@@ -92,11 +96,11 @@ function buildReplyUserPrompt({ userMessage, messages, products, intent, searchT
   );
 }
 
-async function generateReply({ userMessage, messages, products, intent, searchType }) {
+async function generateReply({ userMessage, messages, products, intent, searchType, skuLookupNoExactMatch, skuTokens }) {
   const text = await chatText({
     model: RETRIEVAL_CONFIG.queryUnderstandingModel,
     system: REPLY_SYSTEM_PROMPT,
-    user: buildReplyUserPrompt({ userMessage, messages, products, intent, searchType }),
+    user: buildReplyUserPrompt({ userMessage, messages, products, intent, searchType, skuLookupNoExactMatch, skuTokens }),
     maxTokens: 180,
     temperature: 0.4,
     timeoutMs: 6000,
@@ -104,6 +108,9 @@ async function generateReply({ userMessage, messages, products, intent, searchTy
   if (text) return text;
   // Fallback if the LLM is unreachable — produce something usable, not silence.
   if (searchType === "non_search") return "Happy to help — what are you looking for today?";
+  if (skuLookupNoExactMatch && skuTokens?.length) {
+    return `We don't carry SKU ${skuTokens.join(", ")} in our catalog. Showing ${products.length} related products — want me to connect you with sales at websales@creativeautomation.ae for sourcing?`;
+  }
   if (products.length === 0) return `I couldn't find anything matching "${intent.free_text}" in our catalog. Want me to connect you with our sales team at websales@creativeautomation.ae?`;
   const brandLine = intent.brand_exclude?.length
     ? ` from brands other than ${intent.brand_exclude.join(", ")}`
@@ -111,7 +118,7 @@ async function generateReply({ userMessage, messages, products, intent, searchTy
     ? ` from ${intent.brand_include.join(", ")}`
     : "";
   const catLine = intent.category ? ` ${intent.category}` : " products";
-  return `Found ${products.length}${catLine}${brandLine} — see the cards above.`;
+  return `Here are ${products.length} top${catLine} matches${brandLine} — see the cards above.`;
 }
 
 function cors(req) {
@@ -162,6 +169,8 @@ export const action = async ({ request }) => {
     products: result.products,
     intent: result.intent,
     searchType: result.searchType,
+    skuLookupNoExactMatch: result.skuLookupNoExactMatch,
+    skuTokens: result.skuTokens,
   });
   const elapsedMs = Date.now() - startedAt;
 

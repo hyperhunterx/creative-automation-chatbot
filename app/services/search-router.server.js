@@ -146,13 +146,19 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   // products that literally contain that token (in title or a variant SKU)
   // are useful. Without this, the rerank dilutes the page with vector-only
   // matches that share no real signal with the SKU.
+  //   skuFiltered          = the page WAS narrowed to actual SKU matches
+  //   skuLookupNoExactMatch = a SKU was searched but the catalog has none;
+  //                           kept the hybrid results as "related items"
   const skuTokens = extractSkuTokens(intent.free_text);
   let skuFiltered = false;
+  let skuLookupNoExactMatch = false;
   if (skuTokens.length > 0) {
     const narrowed = top.filter(p => productMatchesAnySku(p, skuTokens));
     if (narrowed.length > 0) {
       top = narrowed;
       skuFiltered = true;
+    } else {
+      skuLookupNoExactMatch = true;
     }
   }
 
@@ -182,18 +188,24 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
     embed_fallback: embedFallback,
     category_relaxed: categoryRelaxed,
     sku_filtered: skuFiltered,
+    sku_lookup_no_exact_match: skuLookupNoExactMatch,
     top3_ids: top.slice(0, 3).map(p => p.id),
   });
 
   let searchType = 'hybrid';
   if (skuFiltered) searchType = 'hybrid_sku';
+  else if (skuLookupNoExactMatch) searchType = 'hybrid_sku_no_match';
   else if (categoryRelaxed) searchType = 'hybrid_category_relaxed';
 
   return {
     products: top,
     intent,
     searchType,
-    systemHint: `Found ${top.length} matching products. Acknowledge briefly — the cards are already displayed.`,
+    skuTokens,
+    skuLookupNoExactMatch,
+    systemHint: skuLookupNoExactMatch
+      ? `No exact match for SKU "${skuTokens.join(', ')}". Showing ${top.length} related products as alternatives.`
+      : `Found ${top.length} matching products. Acknowledge briefly — the cards are already displayed.`,
   };
 }
 
