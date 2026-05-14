@@ -88,9 +88,12 @@ export async function hybridSearch(intent) {
             EXISTS (
               SELECT 1 FROM jsonb_each_text(specs) AS s
               WHERE lower(s.value) = lower(required.v)
+                 OR replace(lower(s.value), ' ', '') LIKE '%' || replace(lower(required.v), ' ', '') || '%'
             )
             OR title ILIKE '%' || required.v || '%'
             OR description ILIKE '%' || required.v || '%'
+            OR replace(lower(title), ' ', '') LIKE '%' || replace(lower(required.v), ' ', '') || '%'
+            OR replace(lower(description), ' ', '') LIKE '%' || replace(lower(required.v), ' ', '') || '%'
           )
         )
       )

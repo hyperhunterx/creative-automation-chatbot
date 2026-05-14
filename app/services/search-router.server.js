@@ -83,49 +83,75 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   }
   const t2Ms = Date.now() - t2;
 
-  // Step 3 — hybrid retrieval
-  // Two paths run in parallel:
-  //  (a) hybridSearch with structured spec_values filter (JSONB containment)
-  //  (b) findProductsByLiteralPattern for slash-style specs (5/2, 3/2, 1/4)
-  //      that the Postgres `simple` tsvector tokenizer destroys.
-  // Spec patterns from the user message are also added to LLM-extracted
-  // spec_values so the structured filter catches both.
+  // Step 3 — hybrid retrieval with a 3-tier relax cascade.
+  //
+  // Two retrieval paths run together each pass:
+  //   (a) hybridSearch — structured spec_values JSONB containment filter
+  //   (b) findProductsByLiteralPattern — literal slash-style spec patterns
+  //       (5/2, 3/2, 1/4) that the Postgres `simple` tsvector tokenizer destroys
+  //
+  // Cascade tiers — each tier only fires if the previous returned zero:
+  //   1. Strict        — category + brand + spec_values (full intent)
+  //   2. Spec-relaxed  — drop spec_values, keep category + brand. Triggered
+  //                      when LLM extracts free-text spec tokens ("230V",
+  //                      "single phase") that don't match the catalog's
+  //                      literal formatting ("230 V ac", "1 Phase") and
+  //                      collapse the result set to nothing.
+  //   3. Cat-relaxed   — drop category too, keep brand only. Triggered when
+  //                      the LLM picked a category absent from the catalog.
+  //
+  // We run spec-relax BEFORE category-relax because spec_values is the noisier
+  // signal — the LLM frequently picks tokens that don't appear verbatim in
+  // the catalog, while the user's category intent is usually right.
   const t3 = Date.now();
   const specPatterns = extractSlashSpecPatterns(intent.free_text);
   const mergedSpecValues = mergeUnique(intent.spec_values || [], specPatterns);
-  const filters = {
+  const strictFilters = {
     category: intent.category,
     brand_include: intent.brand_include,
     brand_exclude: intent.brand_exclude,
   };
-  const [hybridResults, specResults] = await Promise.all([
-    hybridSearch({
-      ...filters,
-      spec_values: mergedSpecValues,
-      free_text: intent.free_text,
-      query_vector: queryVector,
-    }),
-    specPatterns.length > 0
-      ? findProductsByTitlePattern(specPatterns, { ...filters, limit: 20 })
-      : Promise.resolve([]),
-  ]);
-  // Merge: spec-pattern matches first (most relevant for industrial queries),
-  // then hybrid results, dedup'd by id.
-  const seen = new Set();
-  let candidates = [];
-  for (const p of specResults) {
-    if (!seen.has(p.id)) { seen.add(p.id); candidates.push(p); }
-  }
-  for (const p of hybridResults) {
-    if (!seen.has(p.id)) { seen.add(p.id); candidates.push(p); }
-  }
-  const specBoosted = specResults.length > 0;
+
+  // Single retrieval pass — dual-path + dedup. Returns merged candidates
+  // (spec-pattern matches first, then hybrid) and a `specBoosted` flag.
+  const runPass = async (filters, specValues) => {
+    const [hybridResults, specResults] = await Promise.all([
+      hybridSearch({
+        ...filters,
+        spec_values: specValues,
+        free_text: intent.free_text,
+        query_vector: queryVector,
+      }),
+      specPatterns.length > 0
+        ? findProductsByTitlePattern(specPatterns, { ...filters, limit: 20 })
+        : Promise.resolve([]),
+    ]);
+    const seen = new Set();
+    const out = [];
+    for (const p of specResults) {
+      if (!seen.has(p.id)) { seen.add(p.id); out.push(p); }
+    }
+    for (const p of hybridResults) {
+      if (!seen.has(p.id)) { seen.add(p.id); out.push(p); }
+    }
+    return { merged: out, specBoosted: specResults.length > 0 };
+  };
+
+  // Tier 1 — strict.
+  const pass1 = await runPass(strictFilters, mergedSpecValues);
+  let candidates = pass1.merged;
+  const specBoosted = pass1.specBoosted;
+  let specRelaxed = false;
   let categoryRelaxed = false;
-  // If the LLM-extracted category was too narrow to match any catalog tag
-  // verbatim (e.g. "pneumatic cylinders" when the catalog stores
-  // "pneumatic cylinders & actuators"), retry without the category filter.
-  // Brand filters are kept — they're the only stickiness signal that's
-  // worth defending hard. The rerank step still favors topical relevance.
+
+  // Tier 2 — spec relax (only if spec_values were actually applied).
+  if (candidates.length === 0 && mergedSpecValues.length > 0) {
+    specRelaxed = true;
+    const pass2 = await runPass(strictFilters, []);
+    candidates = pass2.merged;
+  }
+
+  // Tier 3 — category relax (drop both category and spec_values, keep brand).
   if (candidates.length === 0 && intent.category) {
     categoryRelaxed = true;
     const relaxedFilters = {
@@ -133,25 +159,8 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
       brand_include: intent.brand_include,
       brand_exclude: intent.brand_exclude,
     };
-    const [relaxedHybrid, relaxedSpec] = await Promise.all([
-      hybridSearch({
-        ...relaxedFilters,
-        spec_values: mergedSpecValues,
-        free_text: intent.free_text,
-        query_vector: queryVector,
-      }),
-      specPatterns.length > 0
-        ? findProductsByTitlePattern(specPatterns, { ...relaxedFilters, limit: 20 })
-        : Promise.resolve([]),
-    ]);
-    const seen2 = new Set();
-    candidates = [];
-    for (const p of relaxedSpec) {
-      if (!seen2.has(p.id)) { seen2.add(p.id); candidates.push(p); }
-    }
-    for (const p of relaxedHybrid) {
-      if (!seen2.has(p.id)) { seen2.add(p.id); candidates.push(p); }
-    }
+    const pass3 = await runPass(relaxedFilters, []);
+    candidates = pass3.merged;
   }
 
   // Hard slash-pattern post-filter. When the user asked for "5/2", drop any
@@ -241,6 +250,7 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
     candidates: candidates.length,
     returned: top.length,
     embed_fallback: embedFallback,
+    spec_relaxed: specRelaxed,
     category_relaxed: categoryRelaxed,
     spec_boosted: specBoosted,
     sku_filtered: skuFiltered,
@@ -252,6 +262,7 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   if (skuFiltered) searchType = 'hybrid_sku';
   else if (skuLookupNoExactMatch) searchType = 'hybrid_sku_no_match';
   else if (categoryRelaxed) searchType = 'hybrid_category_relaxed';
+  else if (specRelaxed) searchType = 'hybrid_spec_relaxed';
   else if (specBoosted) searchType = 'hybrid_spec';
 
   return {
@@ -301,17 +312,25 @@ export function extractSlashSpecPatterns(text) {
   return [...new Set(matches)];
 }
 
-// Extract tokens that look like a product SKU from arbitrary free-text:
-// alphanumeric, at least 4 chars, contains at least one digit. Hyphens / dots /
-// slashes inside are kept (e.g. "DSNU-20-50-P-A"). Pure words ("filter") and
-// pure-number tokens ("100") are excluded. Returns uppercased dedup'd list.
+// Extract tokens that look like a product SKU from arbitrary free-text.
+// A real SKU has both digits and letters/punctuation, AND is structured enough
+// to be more than a units-style token. Rules:
+//   - must contain at least one digit
+//   - must contain a letter OR structural punctuation (dot/hyphen/underscore/slash)
+//   - must be either 5+ chars long (DUS60E, R412006218, ACS310) OR contain
+//     structural punctuation (DSNU-20, 1.5/2). A short "230V" / "24V" / "M20"
+//     is a spec, not a SKU; without this gate the filter mistakes voltages for
+//     part numbers and aggressively prunes correct results.
+// Returns uppercased dedup'd list.
 export function extractSkuTokens(text) {
   if (!text || typeof text !== 'string') return [];
   const out = new Set();
   const matches = text.match(/\b[A-Za-z0-9][A-Za-z0-9.\-_/]{3,}\b/g) || [];
   for (const m of matches) {
-    if (!/\d/.test(m)) continue;          // must have a digit
+    if (!/\d/.test(m)) continue;                            // must have a digit
     if (!/[A-Za-z]/.test(m) && !/[.\-_/]/.test(m)) continue; // not pure-number
+    const hasStructuralPunct = /[.\-_/]/.test(m);
+    if (m.length < 5 && !hasStructuralPunct) continue;      // skip short tokens like "230V", "24V", "M20"
     out.add(m.toUpperCase());
   }
   return [...out];

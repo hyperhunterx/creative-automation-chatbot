@@ -124,6 +124,19 @@ describe('smartSearch (v6 orchestrator)', () => {
     expect(extractSkuTokens(null)).toEqual([]);
   });
 
+  it('extractSkuTokens rejects spec-style short tokens (230V, 24V, M20)', async () => {
+    const { extractSkuTokens } = await import('../../app/services/search-router.server.js?case=sku2');
+    // These are voltages / connection types, not SKUs. Without this gate they
+    // get matched as SKUs and the SKU narrowing wipes out correct results.
+    expect(extractSkuTokens('inverter drive 230V single phase')).toEqual([]);
+    expect(extractSkuTokens('24V power supply')).toEqual([]);
+    expect(extractSkuTokens('cable entry M20')).toEqual([]);
+    // But 5+ char tokens without punctuation are still valid SKUs:
+    expect(extractSkuTokens('DUS60E sensor')).toEqual(['DUS60E']);
+    // And shorter tokens WITH structural punctuation are still SKUs:
+    expect(extractSkuTokens('part 1.5/2 valve')).toEqual(['1.5/2']);
+  });
+
   it('drops candidates without the requested slash-pattern (5/2 != 3/2 != 15/2)', async () => {
     mods.qu.extractIntent.mockResolvedValue({
       is_search: true,
@@ -160,6 +173,63 @@ describe('smartSearch (v6 orchestrator)', () => {
     expect(productContainsAllPatterns({ title: '', description: '', specs: { Type: '5/2' } }, ['5/2'])).toBe(true);
     expect(productContainsAllPatterns({ title: 'anything' }, [])).toBe(true);
     expect(productContainsAllPatterns({ title: 'Valve 5/2 and 24V port' }, ['5/2'])).toBe(true);
+  });
+
+  it('falls back to spec-relax when spec_values filter returns 0 candidates', async () => {
+    // Scenario: user typed "inverter drive 230V single phase", LLM extracted
+    // spec_values=["230V","single phase"], but catalog has "230 V" with a space
+    // and "1 Phase" not "single phase" — strict filter returns 0. Spec-relax
+    // tier drops spec_values and the right ABB drive surfaces from BM25.
+    mods.re.hybridSearch.mockClear();
+    mods.qu.extractIntent.mockResolvedValue({
+      is_search: true,
+      category: 'inverter drives',
+      brand_include: [],
+      brand_exclude: [],
+      specs: {},
+      spec_values: ['230V', 'single phase'],
+      free_text: 'inverter drive 230V single phase',
+    });
+    mods.em.embedOne.mockResolvedValue(new Array(1024).fill(0.01));
+    // First call (strict) returns 0. Second call (spec-relaxed) returns the real drives.
+    mods.re.hybridSearch
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: 'abb1', title: 'ABB ACS310 Inverter Drive 1.5 kW 1 Phase 230 V ac', vendor: 'ABB', vendorNormalized: 'abb' },
+      ]);
+    mods.re.findProductsByTitlePattern.mockResolvedValue([]);
+    mods.rk.rerank.mockImplementation(async (_q, items) => items);
+
+    const { smartSearch } = await import('../../app/services/search-router.server.js?case=spec-relax');
+    const out = await smartSearch({
+      messages: [{ role: 'user', content: 'inverter drive 230V single phase' }],
+    });
+    expect(out.products.map(p => p.id)).toEqual(['abb1']);
+    expect(out.searchType).toBe('hybrid_spec_relaxed');
+    // Strict pass + relaxed pass = 2 calls (no category-relax needed since spec-relax found rows).
+    expect(mods.re.hybridSearch).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips spec-relax when spec_values is empty (no extra retrieval call)', async () => {
+    mods.re.hybridSearch.mockClear();
+    mods.qu.extractIntent.mockResolvedValue({
+      is_search: true,
+      category: 'cables',
+      brand_include: [],
+      brand_exclude: [],
+      specs: {},
+      spec_values: [],
+      free_text: 'cables',
+    });
+    mods.em.embedOne.mockResolvedValue(new Array(1024).fill(0.01));
+    mods.re.hybridSearch.mockResolvedValue([{ id: 'c1', title: 'Cable 1' }]);
+    mods.re.findProductsByTitlePattern.mockResolvedValue([]);
+    mods.rk.rerank.mockImplementation(async (_q, items) => items);
+    const { smartSearch } = await import('../../app/services/search-router.server.js?case=spec-relax-skip');
+    const out = await smartSearch({ messages: [{ role: 'user', content: 'cables' }] });
+    expect(out.searchType).toBe('hybrid');
+    // Only the strict pass should run.
+    expect(mods.re.hybridSearch).toHaveBeenCalledTimes(1);
   });
 
   it('short-circuits when LLM says is_search=false (off-topic)', async () => {
