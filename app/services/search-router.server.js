@@ -106,8 +106,17 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   const t3 = Date.now();
   const specPatterns = extractSlashSpecPatterns(intent.free_text);
   const mergedSpecValues = mergeUnique(intent.spec_values || [], specPatterns);
+  // Detect SKU tokens up front. When the user types a SKU like "DUS60E", the
+  // LLM frequently sticks the carry-over category (e.g. "inverter drives" from
+  // a prior turn) onto the new turn — locking retrieval to the wrong shelf
+  // and blocking the exact product. A SKU is a specific-product signal that
+  // overrides topical context, so we null category before retrieval and let
+  // BM25 + vector + the post-rerank SKU narrowing do the rest. Brand filters
+  // stay — user can still say "the Siemens version of X".
+  const skuTokensEarly = extractSkuTokens(intent.free_text);
+  const skuOverridesCategory = skuTokensEarly.length > 0 && intent.category != null;
   const strictFilters = {
-    category: intent.category,
+    category: skuOverridesCategory ? null : intent.category,
     brand_include: intent.brand_include,
     brand_exclude: intent.brand_exclude,
   };
@@ -152,7 +161,9 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   }
 
   // Tier 3 — category relax (drop both category and spec_values, keep brand).
-  if (candidates.length === 0 && intent.category) {
+  // Only fires if a category filter was actually in effect during this turn —
+  // SKU queries already null category up front, so there's nothing to relax.
+  if (candidates.length === 0 && strictFilters.category) {
     categoryRelaxed = true;
     const relaxedFilters = {
       category: null,
@@ -213,7 +224,8 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
   //   skuFiltered          = the page WAS narrowed to actual SKU matches
   //   skuLookupNoExactMatch = a SKU was searched but the catalog has none;
   //                           kept the hybrid results as "related items"
-  const skuTokens = extractSkuTokens(intent.free_text);
+  // Tokens were already extracted at the top of step 3 to drive category-override.
+  const skuTokens = skuTokensEarly;
   let skuFiltered = false;
   let skuLookupNoExactMatch = false;
   if (skuTokens.length > 0) {
@@ -253,6 +265,7 @@ export async function smartSearch({ messages, lastShownCategory = null, lastShow
     spec_relaxed: specRelaxed,
     category_relaxed: categoryRelaxed,
     spec_boosted: specBoosted,
+    sku_overrides_category: skuOverridesCategory,
     sku_filtered: skuFiltered,
     sku_lookup_no_exact_match: skuLookupNoExactMatch,
     top3_ids: top.slice(0, 3).map(p => p.id),

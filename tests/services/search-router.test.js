@@ -232,6 +232,46 @@ describe('smartSearch (v6 orchestrator)', () => {
     expect(mods.re.hybridSearch).toHaveBeenCalledTimes(1);
   });
 
+  it('SKU query overrides sticky category from prior turn (DUS60E does not get locked into "inverter drives")', async () => {
+    // Scenario: prior turn was about Siemens/Mitsubishi inverter drives, so
+    // carry-over has lastShownCategory=inverter drives. User then types just
+    // "DUS60E" (a SICK motion sensor SKU). The LLM, seeing the carry-over,
+    // sets category=inverter drives — wrong, but the search-router must
+    // ignore that and not constrain retrieval to inverter drives.
+    mods.re.hybridSearch.mockClear();
+    mods.qu.extractIntent.mockResolvedValue({
+      is_search: true,
+      category: 'inverter drives',
+      brand_include: [],
+      brand_exclude: [],
+      specs: {},
+      spec_values: [],
+      free_text: 'DUS60E',
+    });
+    mods.em.embedOne.mockResolvedValue(new Array(1024).fill(0.01));
+    // Mock: with category=null forced (sku-override), retrieval returns sensors.
+    mods.re.hybridSearch.mockResolvedValue([
+      { id: 'sensor1', title: 'DUS60E - Incremental Motion Control Sensor, Through hollow shaft', vendor: 'SICK', vendorNormalized: 'sick' },
+      { id: 'sensor2', title: 'DUS60E - Incremental Motion Control Sensor, Blind hollow shaft', vendor: 'SICK', vendorNormalized: 'sick' },
+    ]);
+    mods.re.findProductsByTitlePattern.mockResolvedValue([]);
+    mods.rk.rerank.mockImplementation(async (_q, items) => items);
+
+    const { smartSearch } = await import('../../app/services/search-router.server.js?case=sku-override');
+    const out = await smartSearch({
+      messages: [{ role: 'user', content: 'DUS60E' }],
+      lastShownCategory: 'inverter drives',
+      lastShownBrands: ['siemens', 'mitsubishi'],
+    });
+    // Assert retrieval was called with category=null (sku override) — read the
+    // first positional call's args.
+    const firstCallArgs = mods.re.hybridSearch.mock.calls[0][0];
+    expect(firstCallArgs.category).toBeNull();
+    // And the right sensors came back, SKU-filtered.
+    expect(out.products.map(p => p.id)).toEqual(['sensor1', 'sensor2']);
+    expect(out.searchType).toBe('hybrid_sku');
+  });
+
   it('short-circuits when LLM says is_search=false (off-topic)', async () => {
     mods.em.embedOne.mockClear();
     mods.re.hybridSearch.mockClear();
