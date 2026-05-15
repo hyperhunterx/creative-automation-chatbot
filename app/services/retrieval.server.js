@@ -76,7 +76,12 @@ export async function hybridSearch(intent) {
     WHERE "deletedAt" IS NULL
       AND (
         $3::text IS NULL
-        OR EXISTS (SELECT 1 FROM unnest(categories) c WHERE c ILIKE '%' || $3 || '%')
+        OR EXISTS (
+          SELECT 1 FROM unnest(categories) c
+          WHERE c ILIKE '%' || $3 || '%'
+             OR c ILIKE '%' || rtrim($3, 's') || '%'
+             OR c ILIKE '%' || regexp_replace($3, 'es$', '') || '%'
+        )
       )
       AND (cardinality($4::text[]) = 0 OR "vendorNormalized" = ANY($4))
       AND (cardinality($5::text[]) = 0 OR "vendorNormalized" IS NULL OR "vendorNormalized" <> ALL($5))
@@ -174,7 +179,12 @@ export async function findProductsByLiteralPattern(patterns, filters = {}) {
     WHERE "deletedAt" IS NULL
       AND (
         $1::text IS NULL
-        OR EXISTS (SELECT 1 FROM unnest(categories) c WHERE c ILIKE '%' || $1 || '%')
+        OR EXISTS (
+          SELECT 1 FROM unnest(categories) c
+          WHERE c ILIKE '%' || $1 || '%'
+             OR c ILIKE '%' || rtrim($1, 's') || '%'
+             OR c ILIKE '%' || regexp_replace($1, 'es$', '') || '%'
+        )
       )
       AND (cardinality($2::text[]) = 0 OR "vendorNormalized" = ANY($2))
       AND (cardinality($3::text[]) = 0 OR "vendorNormalized" IS NULL OR "vendorNormalized" <> ALL($3))

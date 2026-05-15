@@ -100,7 +100,7 @@ integrationDescribe('retrieval.server', () => {
     expect(ids.has('gid://x/2')).toBe(false); // SMC, Japan
   });
 
-  integrationIt('category match is substring — "solenoid valves" finds "pneumatic solenoid valves" and "solenoid valve accessories"', async () => {
+  integrationIt('category match handles singular/plural ("ethernet cables" finds "ethernet cable", "solenoid valves" finds "solenoid valve accessories")', async () => {
     const { hybridSearch } = await import('../../app/services/retrieval.server.js');
     const results = await hybridSearch({
       category: 'solenoid valves',
@@ -110,16 +110,16 @@ integrationDescribe('retrieval.server', () => {
       query_vector: cylinderVec(),
     });
     const ids = new Set(results.map(r => r.id));
-    // Waircom row's category is "pneumatic solenoid valves" — contains the search term.
+    // Waircom row's category is "pneumatic solenoid valves" — direct substring match.
     expect(ids.has('gid://x/7')).toBe(true);
-    // SMC row's category is "solenoid valve accessories" — also contains it
-    // (note singular "valve" — the search is "solenoid valves" with an "s"; the
-    // substring matched is the longer-string-side, not the user-side, so this
-    // case actually does NOT match unless we also check the singular form).
-    // Document the current behavior: we substring-match the catalog tag against
-    // the user-supplied category, not the other way around, so "solenoid valves"
-    // does NOT match "solenoid valve accessories" (missing the trailing "s").
-    expect(ids.has('gid://x/8')).toBe(false);
+    // SMC row's category is "solenoid valve accessories" — the user-side "solenoid
+    // valves" is plural; the SQL filter strips trailing 's' and trailing 'es', so
+    // both "solenoid valve" and "solenoid valv" are tried. "solenoid valve"
+    // is a substring of "solenoid valve accessories", so the row matches.
+    // This handles the real catalog pattern where the LLM extracts the plural
+    // form ("ethernet cables", "inverter drives") but the catalog tags are
+    // singular ("ethernet cable", "inverter drive accessories", etc).
+    expect(ids.has('gid://x/8')).toBe(true);
     // And it must NOT pull in unrelated categories.
     expect(ids.has('gid://x/5')).toBe(false); // circuit breakers
   });
