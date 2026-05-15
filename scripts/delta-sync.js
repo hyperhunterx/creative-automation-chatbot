@@ -16,6 +16,9 @@
 //                                                      # inventory change, so updated_at deltas are
 //                                                      # mostly stock-level edits we'd re-embed for no benefit.
 //   node scripts/delta-sync.js --since 2026-05-12       # explicit cutoff
+//   node scripts/delta-sync.js --vendor Schmersal       # scope to one vendor (Shopify-side vendor filter)
+//                                                      # Combine with --since to re-sync that vendor's enriched specs:
+//                                                      # node scripts/delta-sync.js --vendor Schmersal --since 2026-05-12T00:00:00Z
 //   node scripts/delta-sync.js --dry-run                # NO writes, NO embeddings
 //
 // SAFETY:
@@ -36,6 +39,8 @@ const DRY_RUN = process.argv.includes('--dry-run');
 const CREATED_ONLY = process.argv.includes('--created-only');
 const sinceArgIdx = process.argv.indexOf('--since');
 const sinceArg = sinceArgIdx >= 0 ? process.argv[sinceArgIdx + 1] : null;
+const vendorArgIdx = process.argv.indexOf('--vendor');
+const vendorArg = vendorArgIdx >= 0 ? process.argv[vendorArgIdx + 1] : null;
 
 const REQUIRED_ENV = ['SHOPIFY_SHOP_DOMAIN', 'SHOPIFY_ADMIN_TOKEN', 'DATABASE_URL'];
 if (!DRY_RUN) REQUIRED_ENV.push('VOYAGE_API_KEY');
@@ -60,14 +65,21 @@ async function resolveSince() {
 const since = await resolveSince();
 const filterField = CREATED_ONLY ? 'created_at' : 'updated_at';
 console.log(`=== delta-sync.js — ${DRY_RUN ? 'DRY RUN' : 'APPLY MODE'} ===`);
-console.log(`  cutoff (${filterField} >): ${since}\n`);
+console.log(`  cutoff (${filterField} >): ${since}`);
+if (vendorArg) console.log(`  vendor filter: '${vendorArg}'`);
+console.log('');
 
 const client = makeAdminClient({
   shopDomain: process.env.SHOPIFY_SHOP_DOMAIN,
   accessToken: process.env.SHOPIFY_ADMIN_TOKEN,
 });
 
-const queryFilter = `${filterField}:>${since}`;
+// Compose Shopify products query filter. Shopify supports boolean AND inside
+// the query string, so vendor + updated_at compose naturally:
+//   vendor:'Schmersal' AND updated_at:>2026-05-12T00:00:00Z
+const filterClauses = [`${filterField}:>${since}`];
+if (vendorArg) filterClauses.push(`vendor:'${vendorArg.replace(/'/g, '')}'`);
+const queryFilter = filterClauses.join(' AND ');
 let total = 0;
 let pageNum = 0;
 let firstSampleTitles = [];
