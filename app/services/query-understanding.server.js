@@ -25,7 +25,7 @@ Given the user's most recent message AND the prior conversation, output STRICTLY
 JSON schema (every key required; use empty arrays / empty object / null for not-present):
 {
   "is_search": boolean,              // true if this turn is asking the catalog to find a product; false for chit-chat, greetings, off-topic, vague meta-questions.
-  "category": string | null,        // LOWERCASE granular product category matching how the catalog tags products, e.g. "pneumatic guided cylinders", "motion control sensors", "inverter drives", "damper actuators", "sensor & actuator cables". Prefer the most specific category that fits the user's intent. Use null if the user hasn't asked about a specific product family.
+  "category": string | null,        // LOWERCASE granular product category matching how the catalog tags products. Examples actually present in the catalog: "pneumatic guided cylinders", "motion control sensors", "inverter drives", "damper actuators", "sensor & actuator cables", "ethernet cable", "ethernet connectors", "limit switches", "solenoid valves", "circuit breakers", "proximity sensors", "safety interlock switches", "terminal blocks", "power supplies", "relays", "contactors", "encoders", "heat shrink boots", "pneumatic fittings". When the user explicitly names a product type ("ethernet cable", "limit switch", "proximity sensor"), that wording is the category — extract it verbatim in lowercase, do NOT swap it for a similar-sounding category from carry-over. Prefer the most specific category that fits the user's intent. Use null if the user hasn't asked about a specific product family.
   "brand_include": string[],         // LOWERCASE brand names the user wants to see; empty = any brand. Example: ["smc", "festo"]
   "brand_exclude": string[],         // LOWERCASE brand names the user does NOT want. Example: user says "from another brand" after seeing Festo → ["festo"]
   "specs": object,                   // legacy slot; leave empty {} unless specifically asked to use it
@@ -44,7 +44,11 @@ Rules for is_search — the test is "does the page need a NEW set of product car
 Rules for the rest:
 - ALL brand names and the category MUST be lowercase. The catalog filters on a lowercased index — mixed-case values will silently miss.
 - Use the prior conversation. If the user previously asked about "M20 pneumatic guided cylinder from Smc" and now says "from another brand", category stays "pneumatic guided cylinders" and brand_exclude=["smc"].
-- If you receive a "Last shown:" hint about category/brands, USE IT to anchor the current turn. The hint is already lowercase — copy it through unchanged.
+- The "Last shown:" hint fills in MISSING context only — it does NOT override what the new turn explicitly says. Examples:
+    - Prior: "Last shown: category=sensor & actuator cables". User now says "ifm ethernet cable" → category="ethernet cable" (new turn names a different product type, IGNORE the hint).
+    - Prior: "Last shown: category=inverter drives". User now says "DUS60E" (a SKU) → category=null (specific SKU overrides topical context).
+    - Prior: "Last shown: category=solenoid valves, brands=[festo]". User now says "show me another brand" → category="solenoid valves", brand_exclude=["festo"] (no new product type, use carry-over).
+- If a hint matches the new turn's intent, copy it through unchanged. If it conflicts, follow the new turn.
 - Never invent specs. If the user did not state a value, leave specs empty.
 - free_text keeps its natural casing (this drives BM25 ranking on titles/SKUs).
 - If is_search is false, you may still echo the user's message into free_text but the retrieval layer will ignore it.

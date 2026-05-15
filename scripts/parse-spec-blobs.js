@@ -7,9 +7,10 @@
 // already have; we just unlock the structure inside it.
 //
 // USAGE:
-//   node scripts/parse-spec-blobs.js                 # dry run — read-only, prints first 5 diffs
-//   node scripts/parse-spec-blobs.js --apply         # writes merged specs
-//   node scripts/parse-spec-blobs.js --apply --limit 200   # apply but cap at 200 rows (for staged rollout)
+//   node scripts/parse-spec-blobs.js                                    # dry run — read-only, prints first 5 diffs
+//   node scripts/parse-spec-blobs.js --apply                            # writes merged specs (full scan)
+//   node scripts/parse-spec-blobs.js --apply --limit 200                # apply but cap at 200 rows (for staged rollout)
+//   node scripts/parse-spec-blobs.js --apply --since 2026-05-12         # only touch rows whose updatedAt > cutoff (post-delta-sync)
 //
 // SAFETY:
 //   - Dry run never writes.
@@ -26,8 +27,10 @@ import { parseSpecBlob } from '../app/services/product-extractor.server.js';
 const APPLY = process.argv.includes('--apply');
 const limitIdx = process.argv.indexOf('--limit');
 const LIMIT = limitIdx >= 0 ? Number(process.argv[limitIdx + 1]) : Infinity;
+const sinceIdx = process.argv.indexOf('--since');
+const SINCE = sinceIdx >= 0 ? process.argv[sinceIdx + 1] : null;
 
-console.log(`=== parse-spec-blobs.js — ${APPLY ? 'APPLY MODE' : 'DRY RUN'} (limit=${Number.isFinite(LIMIT) ? LIMIT : 'no cap'}) ===\n`);
+console.log(`=== parse-spec-blobs.js — ${APPLY ? 'APPLY MODE' : 'DRY RUN'} (limit=${Number.isFinite(LIMIT) ? LIMIT : 'no cap'}, since=${SINCE || 'all'}) ===\n`);
 
 // Pull only the rows that have a blob worth parsing. Stream in pages so we
 // don't load 142k rows into memory at once.
@@ -44,6 +47,10 @@ while (true) {
   if (totalSeen >= LIMIT) break;
   // Keyset pagination — WHERE id > lastId — stays fast as we get deeper into
   // the catalog, unlike OFFSET which scans more rows the further it goes.
+  // Optional --since filter narrows to rows touched after that timestamp, so
+  // a post-delta-sync re-parse only inspects the ~thousands of new/updated
+  // rows instead of all 142k. Whole-catalog parse takes ~30 min, since-filter
+  // takes ~1 min.
   const rows = await prisma.$queryRawUnsafe(
     `
     SELECT id, title, specs
@@ -52,10 +59,12 @@ while (true) {
       AND id > $1
       AND specs ? 'product_specification'
       AND length(specs->>'product_specification') > 50
+      AND ($2::timestamp IS NULL OR "updatedAt" > $2::timestamp)
     ORDER BY id
     LIMIT ${PAGE_SIZE}
   `,
     lastId,
+    SINCE,
   );
   if (rows.length === 0) break;
   lastId = rows[rows.length - 1].id;

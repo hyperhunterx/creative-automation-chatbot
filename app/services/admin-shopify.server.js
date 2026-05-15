@@ -39,8 +39,8 @@ const PRODUCT_NODE_FIELDS = `
 `;
 
 const PRODUCTS_QUERY = `
-  query Products($first: Int!, $after: String) {
-    products(first: $first, after: $after) {
+  query Products($first: Int!, $after: String, $query: String) {
+    products(first: $first, after: $after, query: $query) {
       pageInfo { hasNextPage endCursor }
       nodes { ${PRODUCT_NODE_FIELDS} }
     }
@@ -74,10 +74,14 @@ export function makeAdminClient({ shopDomain, accessToken, apiVersion = '2025-01
   }
 
   return {
-    async *productPages({ pageSize = 250 } = {}) {
+    // Iterate Shopify products in pages. The optional `query` parameter is
+    // passed through to Shopify's GraphQL `products(query: ...)` filter so
+    // delta syncs can scope by `updated_at:>...`, `vendor:'...'`, etc.
+    // Defaults to no filter, preserving the existing bootstrap behavior.
+    async *productPages({ pageSize = 250, query = null } = {}) {
       let after = null;
       while (true) {
-        const data = await gql(PRODUCTS_QUERY, { first: pageSize, after });
+        const data = await gql(PRODUCTS_QUERY, { first: pageSize, after, query });
         yield data.products.nodes;
         if (!data.products.pageInfo.hasNextPage) break;
         after = data.products.pageInfo.endCursor;
