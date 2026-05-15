@@ -83,8 +83,34 @@ export async function hybridSearch(intent) {
              OR c ILIKE '%' || regexp_replace($3, 'es$', '') || '%'
         )
       )
-      AND (cardinality($4::text[]) = 0 OR "vendorNormalized" = ANY($4))
-      AND (cardinality($5::text[]) = 0 OR "vendorNormalized" IS NULL OR "vendorNormalized" <> ALL($5))
+      AND (
+        cardinality($4::text[]) = 0
+        OR "vendorNormalized" = ANY($4)
+        -- First-word match (with hyphen→space) so "ifm electronic" matches
+        -- vendor "ifm", "Phoenix Contact" matches "phoenix-contact", etc.
+        -- Catalog vendor strings often drop the corporate suffix ("ifm" not
+        -- "ifm electronic") or use hyphens ("te-connectivity") where users
+        -- type spaces; the LLM can't be expected to canonicalize all variants.
+        OR EXISTS (
+          SELECT 1 FROM unnest($4::text[]) b
+          WHERE split_part(replace("vendorNormalized", '-', ' '), ' ', 1)
+              = split_part(replace(lower(b), '-', ' '), ' ', 1)
+        )
+      )
+      AND (
+        cardinality($5::text[]) = 0
+        OR "vendorNormalized" IS NULL
+        OR (
+          "vendorNormalized" <> ALL($5)
+          -- Symmetric first-word exclude: if user says "not ifm electronic",
+          -- also exclude rows where vendor "ifm" first-word-matches.
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest($5::text[]) b
+            WHERE split_part(replace("vendorNormalized", '-', ' '), ' ', 1)
+                = split_part(replace(lower(b), '-', ' '), ' ', 1)
+          )
+        )
+      )
       AND (
         cardinality($9::text[]) = 0
         OR NOT EXISTS (
@@ -186,8 +212,27 @@ export async function findProductsByLiteralPattern(patterns, filters = {}) {
              OR c ILIKE '%' || regexp_replace($1, 'es$', '') || '%'
         )
       )
-      AND (cardinality($2::text[]) = 0 OR "vendorNormalized" = ANY($2))
-      AND (cardinality($3::text[]) = 0 OR "vendorNormalized" IS NULL OR "vendorNormalized" <> ALL($3))
+      AND (
+        cardinality($2::text[]) = 0
+        OR "vendorNormalized" = ANY($2)
+        OR EXISTS (
+          SELECT 1 FROM unnest($2::text[]) b
+          WHERE split_part(replace("vendorNormalized", '-', ' '), ' ', 1)
+              = split_part(replace(lower(b), '-', ' '), ' ', 1)
+        )
+      )
+      AND (
+        cardinality($3::text[]) = 0
+        OR "vendorNormalized" IS NULL
+        OR (
+          "vendorNormalized" <> ALL($3)
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest($3::text[]) b
+            WHERE split_part(replace("vendorNormalized", '-', ' '), ' ', 1)
+                = split_part(replace(lower(b), '-', ' '), ' ', 1)
+          )
+        )
+      )
       AND (${literalConds})
     LIMIT $${4 + patterns.length}
   `;
