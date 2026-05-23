@@ -3,6 +3,8 @@
 AI-powered shopping assistant for Shopify stores. Built as a **Shopify Dev Dashboard app** using Shopify's Model Context Protocol (MCP) with Claude (Anthropic) as the LLM. Deployed on Railway.
 
 > **Important:** This is a Dev Dashboard app (not a legacy custom app). It uses OAuth session tokens, theme app extensions, and the app proxy — never permanent admin tokens.
+> 
+MVP VERSION LINK - **https://rohit-chat-agent-production-aee2.up.railway.app/test-chat**
 
 ## Architecture
 
